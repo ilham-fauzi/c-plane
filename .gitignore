@@ -1,0 +1,7 @@
+.cache/
+/cplane
+/cplane-agent
+/cplane.db
+*.db
+*.db-shm
+*.db-wal
