@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
+GITHUB_REPO="ilham-fauzi/c-plane"
+VERSION="latest"
 API_URL=""
 HOST_ID=""
 TOKEN=""
@@ -41,6 +43,7 @@ while [ "$#" -gt 0 ]; do
     --api-url) API_URL="${2:-}"; shift 2 ;;
     --host-id) HOST_ID="${2:-}"; shift 2 ;;
     --token) TOKEN="${2:-}"; shift 2 ;;
+    --version) VERSION="${2:-}"; shift 2 ;;
     --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
     --binary-path) BINARY_PATH="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
@@ -105,7 +108,11 @@ ARCH="$(detect_arch)"
 AGENT_BIN="$INSTALL_DIR/cplane-agent"
 
 if [ -z "$BINARY_URL" ]; then
-  BINARY_URL="${API_URL%/}/downloads/cplane-agent-${OS}-${ARCH}"
+  if [ "$VERSION" = "latest" ]; then
+    BINARY_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/cplane-agent-${OS}-${ARCH}"
+  else
+    BINARY_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/cplane-agent-${OS}-${ARCH}"
+  fi
 fi
 
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$APPS_DIR"
