@@ -126,6 +126,17 @@ GOCACHE="$PWD/.cache/go-build" go build ./cmd/cplane ./cmd/cplane-agent
 GOCACHE="$PWD/.cache/go-build" go test ./...
 ```
 
+## Release
+
+Release tags must publish binary assets because the agent installer downloads `cplane-agent-<os>-<arch>` from the latest GitHub Release.
+
+```bash
+make release VERSION=v0.1.0
+make publish VERSION=v0.1.0
+```
+
+Pushing a `v*` tag also runs the release workflow and uploads linux amd64/arm64 assets automatically.
+
 ## Agent Installation
 
 The agent is installed at server level, not inside an individual app project directory.
