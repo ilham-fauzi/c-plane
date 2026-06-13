@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/ilham/c-plane/internal/id"
@@ -20,6 +21,8 @@ type Server struct {
 	mux   *http.ServeMux
 }
 
+const agentInstallerURL = "https://raw.githubusercontent.com/ilham-fauzi/c-plane/main/scripts/install-agent.sh"
+
 func NewServer(store store.Store) http.Handler {
 	server := &Server{
 		store: store,
@@ -31,6 +34,10 @@ func NewServer(store store.Store) http.Handler {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
+	s.mux.HandleFunc("POST /dashboard/hosts", s.handleDashboardCreateHost)
+	s.mux.HandleFunc("POST /dashboard/repos", s.handleDashboardCreateRepository)
+	s.mux.HandleFunc("POST /dashboard/apps", s.handleDashboardCreateApp)
+	s.mux.HandleFunc("POST /dashboard/deployments", s.handleDashboardCreateDeployment)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 
 	s.mux.HandleFunc("GET /api/hosts", s.handleListHosts)
@@ -74,12 +81,136 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleDashboardCreateHost(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	created, err := s.createHost(r, r.FormValue("name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeInstallCommandPage(w, created)
+}
+
+func (s *Server) handleDashboardCreateRepository(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	repo := model.Repository{
+		ID:            id.New("repo"),
+		Name:          strings.TrimSpace(r.FormValue("name")),
+		Provider:      strings.TrimSpace(r.FormValue("provider")),
+		URL:           strings.TrimSpace(r.FormValue("url")),
+		DefaultBranch: strings.TrimSpace(r.FormValue("default_branch")),
+	}
+	if repo.Name == "" || repo.URL == "" {
+		writeError(w, http.StatusBadRequest, "name and url are required")
+		return
+	}
+	if repo.Provider == "" {
+		repo.Provider = "github"
+	}
+	if repo.DefaultBranch == "" {
+		repo.DefaultBranch = "main"
+	}
+	created, err := s.store.CreateRepository(r.Context(), repo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "repo.created", "repo", created.ID, "")
+	redirectDashboard(w, r)
+}
+
+func (s *Server) handleDashboardCreateApp(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	keep, err := strconv.Atoi(blank(r.FormValue("successful_releases_keep"), "5"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "successful_releases_keep must be a number")
+		return
+	}
+	app := model.App{
+		ID:                     id.New("app"),
+		Name:                   strings.TrimSpace(r.FormValue("name")),
+		RepoID:                 strings.TrimSpace(r.FormValue("repo_id")),
+		HostID:                 strings.TrimSpace(r.FormValue("host_id")),
+		EnvironmentID:          strings.TrimSpace(r.FormValue("environment_id")),
+		RootPath:               strings.TrimSpace(r.FormValue("root_path")),
+		RecipePath:             strings.TrimSpace(r.FormValue("recipe_path")),
+		SuccessfulReleasesKeep: keep,
+	}
+	if app.Name == "" || app.RepoID == "" || app.HostID == "" || app.RootPath == "" || app.RecipePath == "" {
+		writeError(w, http.StatusBadRequest, "name, repo_id, host_id, root_path, and recipe_path are required")
+		return
+	}
+	if app.EnvironmentID == "" {
+		app.EnvironmentID = "production"
+	}
+	if app.SuccessfulReleasesKeep < 3 {
+		writeError(w, http.StatusBadRequest, "successful_releases_keep must be at least 3")
+		return
+	}
+	created, err := s.store.CreateApp(r.Context(), app)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "app.created", "app", created.ID, "")
+	redirectDashboard(w, r)
+}
+
+func (s *Server) handleDashboardCreateDeployment(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	appID := strings.TrimSpace(r.FormValue("app_id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "app_id is required")
+		return
+	}
+	app, err := s.store.GetApp(r.Context(), appID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	job := model.DeploymentJob{
+		ID:          id.New("job"),
+		AppID:       app.ID,
+		HostID:      app.HostID,
+		RepoID:      app.RepoID,
+		Action:      "deploy",
+		Status:      "queued",
+		Ref:         strings.TrimSpace(r.FormValue("ref")),
+		CommitSHA:   strings.TrimSpace(r.FormValue("commit_sha")),
+		RequestedBy: actor(r),
+	}
+	created, err := s.store.CreateDeploymentJob(r.Context(), job)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "deployment.created", "deployment_job", created.ID, "")
+	redirectDashboard(w, r)
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 	hosts, err := s.store.ListHosts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	repos, err := s.store.ListRepositories(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -158,7 +289,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 18px;
     }
@@ -184,6 +315,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
+      margin-bottom: 14px;
     }
     section {
       overflow: hidden;
@@ -247,6 +379,44 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
       font-size: 14px;
       font-weight: 600;
     }
+    form {
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+    }
+    label {
+      display: grid;
+      gap: 5px;
+      color: #637083;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    input, select {
+      width: 100%%;
+      box-sizing: border-box;
+      border: 1px solid #cbd4df;
+      border-radius: 6px;
+      background: #fff;
+      color: #15181d;
+      min-height: 38px;
+      padding: 0 10px;
+      font: inherit;
+      text-transform: none;
+    }
+    button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 6px;
+      background: #184f9e;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .wide {
+      grid-column: 1 / -1;
+    }
     a {
       color: inherit;
       text-decoration: none;
@@ -276,10 +446,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
         background: #101418;
         color: #f3f5f7;
       }
-      .metric, section, .status, .button {
+      .metric, section, .status, .button, input, select {
         background: #161b21;
         border-color: #2d3640;
         box-shadow: none;
+        color: #f3f5f7;
       }
       p, .metric span, .empty, th {
         color: #aab4c0;
@@ -309,6 +480,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
     <div class="metrics">
       <div class="metric"><span>Hosts</span><strong>%d</strong></div>
+      <div class="metric"><span>Repositories</span><strong>%d</strong></div>
       <div class="metric"><span>Apps</span><strong>%d</strong></div>
       <div class="metric"><span>Deployments</span><strong>%d</strong></div>
       <div class="metric"><span>Audit Events</span><strong>%d</strong></div>
@@ -316,9 +488,39 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
     <div class="grid">
       <section>
+        <header><h2>Add Host</h2></header>
+        %s
+      </section>
+
+      <section>
+        <header><h2>Add Repository</h2></header>
+        %s
+      </section>
+
+      <section>
+        <header><h2>Add App</h2></header>
+        %s
+      </section>
+
+      <section>
+        <header><h2>Trigger Deploy</h2></header>
+        %s
+      </section>
+    </div>
+
+    <div class="grid">
+      <section>
         <header>
           <h2>Hosts</h2>
           <div class="actions"><a class="button" href="/api/hosts">API</a></div>
+        </header>
+        %s
+      </section>
+
+      <section>
+        <header>
+          <h2>Repositories</h2>
+          <div class="actions"><a class="button" href="/api/repos">API</a></div>
         </header>
         %s
       </section>
@@ -349,7 +551,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     </div>
   </main>
 </body>
-</html>`, len(hosts), len(apps), len(jobs), len(events), renderHosts(hosts), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
+</html>`, len(hosts), len(repos), len(apps), len(jobs), len(events), renderHostForm(), renderRepoForm(), renderAppForm(hosts, repos), renderDeployForm(apps), renderHosts(hosts), renderRepositories(repos), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
 }
 
 func renderHosts(hosts []model.Host) string {
@@ -366,6 +568,20 @@ func renderHosts(hosts []model.Host) string {
 	return b.String()
 }
 
+func renderRepositories(repos []model.Repository) string {
+	if len(repos) == 0 {
+		return `<div class="empty">No repositories connected yet. Add a Git repository before creating an app.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Provider</th><th>URL</th></tr></thead><tbody>`)
+	for _, repo := range repos {
+		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><span class="pill">%s</span></td><td><code>%s</code></td></tr>`,
+			escape(repo.Name), escape(repo.ID), escape(repo.Provider), escape(repo.URL))
+	}
+	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
 func renderApps(apps []model.App) string {
 	if len(apps) == 0 {
 		return `<div class="empty">No apps configured yet. Apps connect a repository, host, root path, and recipe path.</div>`
@@ -377,6 +593,73 @@ func renderApps(apps []model.App) string {
 			escape(app.Name), escape(app.ID), escape(blank(app.RootPath, "not set")), escape(app.HostID))
 	}
 	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
+func renderHostForm() string {
+	return `<form method="post" action="/dashboard/hosts">
+  <label>Host Name<input name="name" placeholder="sumopod-prod" required></label>
+  <button type="submit">Create Host</button>
+</form>`
+}
+
+func renderRepoForm() string {
+	return `<form method="post" action="/dashboard/repos">
+  <label>Name<input name="name" placeholder="api-al-waqtu" required></label>
+  <label>Provider
+    <select name="provider">
+      <option value="github">GitHub</option>
+      <option value="gitlab">GitLab</option>
+      <option value="generic">Generic Git</option>
+    </select>
+  </label>
+  <label>Repository URL<input name="url" placeholder="https://github.com/org/repo" required></label>
+  <label>Default Branch<input name="default_branch" value="main" required></label>
+  <button type="submit">Connect Repository</button>
+</form>`
+}
+
+func renderAppForm(hosts []model.Host, repos []model.Repository) string {
+	if len(hosts) == 0 || len(repos) == 0 {
+		return `<div class="empty">Create at least one host and one repository before adding an app.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<form method="post" action="/dashboard/apps">
+  <label>App Name<input name="name" placeholder="api-al-waqtu-prod" required></label>
+  <label>Repository<select name="repo_id" required>`)
+	for _, repo := range repos {
+		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(repo.ID), escape(repo.Name))
+	}
+	b.WriteString(`</select></label>
+  <label>Target Host<select name="host_id" required>`)
+	for _, host := range hosts {
+		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(host.ID), escape(host.Name))
+	}
+	b.WriteString(`</select></label>
+  <label>Environment<input name="environment_id" value="production" required></label>
+  <label>Root Path<input name="root_path" placeholder="/var/www/api-al-waqtu" required></label>
+  <label>Recipe Path<input name="recipe_path" placeholder="/opt/c-plane/apps/api-al-waqtu/deploy.yaml" required></label>
+  <label>Successful Releases Keep<input name="successful_releases_keep" value="5" required></label>
+  <button type="submit">Create App</button>
+</form>`)
+	return b.String()
+}
+
+func renderDeployForm(apps []model.App) string {
+	if len(apps) == 0 {
+		return `<div class="empty">Create an app before triggering a deploy.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<form method="post" action="/dashboard/deployments">
+  <label>App<select name="app_id" required>`)
+	for _, app := range apps {
+		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(app.ID), escape(app.Name))
+	}
+	b.WriteString(`</select></label>
+  <label>Ref, Branch, or Tag<input name="ref" value="main" required></label>
+  <label>Commit SHA<input name="commit_sha" placeholder="optional"></label>
+  <button type="submit">Queue Deploy</button>
+</form>`)
 	return b.String()
 }
 
@@ -419,6 +702,90 @@ func escape(value string) string {
 	return html.EscapeString(value)
 }
 
+func (s *Server) createHost(r *http.Request, name string) (model.Host, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return model.Host{}, fmt.Errorf("name is required")
+	}
+	hostID := id.New("srv")
+	installToken := id.New("install")
+	baseURL := externalBaseURL(r)
+	installCommand := "curl -fsSLo install-agent.sh " + agentInstallerURL + " && sudo bash install-agent.sh --api-url " + baseURL + " --host-id " + hostID + " --token " + installToken
+	host := model.Host{
+		ID:             hostID,
+		Name:           name,
+		Status:         "offline",
+		MQTTUsername:   hostID,
+		AgentTokenHash: hashToken(installToken),
+		InstallToken:   installToken,
+		InstallCommand: installCommand,
+	}
+	created, err := s.store.CreateHost(r.Context(), host)
+	if err != nil {
+		return model.Host{}, err
+	}
+	created.InstallToken = installToken
+	created.InstallCommand = installCommand
+	s.recordAudit(r, "user", actor(r), "host.registered", "host", created.ID, "")
+	return created, nil
+}
+
+func writeInstallCommandPage(w http.ResponseWriter, host model.Host) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = fmt.Fprintf(w, `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Agent - C-Plane</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fa; color: #15181d; }
+    body { margin: 0; }
+    main { width: min(880px, calc(100vw - 32px)); margin: 0 auto; padding: 36px 0; }
+    .panel { border: 1px solid #d7dce2; border-radius: 8px; background: #fff; padding: 22px; box-shadow: 0 10px 28px rgba(18, 24, 31, 0.06); }
+    h1 { margin: 0 0 8px; font-size: 26px; letter-spacing: 0; }
+    p { margin: 0 0 16px; color: #56616f; line-height: 1.5; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #101418; color: #f3f5f7; border-radius: 8px; padding: 16px; overflow: auto; }
+    a { display: inline-flex; min-height: 36px; align-items: center; border: 1px solid #cbd4df; border-radius: 6px; padding: 0 12px; color: #1e2b3a; text-decoration: none; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>Install Agent</h1>
+      <p>Host <strong>%s</strong> was created. Copy this command to the target server. This token is shown only once.</p>
+      <pre>%s</pre>
+      <a href="/">Back to dashboard</a>
+    </div>
+  </main>
+</body>
+</html>`, escape(host.Name), escape(host.InstallCommand))
+}
+
+func redirectDashboard(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func externalBaseURL(r *http.Request) string {
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return proto + "://" + host
+}
+
 func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name string `json:"name"`
@@ -431,25 +798,11 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hostID := id.New("srv")
-	installToken := id.New("install")
-	host := model.Host{
-		ID:             hostID,
-		Name:           input.Name,
-		Status:         "offline",
-		MQTTUsername:   hostID,
-		AgentTokenHash: hashToken(installToken),
-		InstallToken:   installToken,
-		InstallCommand: "curl -fsSLo install-agent.sh https://deploy.example.com/install-agent.sh && sudo bash install-agent.sh --api-url https://deploy.example.com --host-id " + hostID + " --token " + installToken,
-	}
-	created, err := s.store.CreateHost(r.Context(), host)
+	created, err := s.createHost(r, input.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	created.InstallToken = installToken
-	created.InstallCommand = host.InstallCommand
-	s.recordAudit(r, "user", actor(r), "host.registered", "host", created.ID, "")
 	writeJSON(w, http.StatusCreated, created)
 }
 

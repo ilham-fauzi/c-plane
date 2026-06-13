@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,6 +98,35 @@ func TestDashboardRoot(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "No hosts registered yet") {
 		t.Fatalf("expected dashboard to render host empty state")
+	}
+	if !strings.Contains(rec.Body.String(), "Add Host") || !strings.Contains(rec.Body.String(), "Trigger Deploy") {
+		t.Fatalf("expected dashboard to render CICD action forms")
+	}
+}
+
+func TestDashboardCreateHostShowsInstallCommand(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	form := url.Values{"name": {"sumopod-prod"}}
+	req := httptest.NewRequest(http.MethodPost, "/dashboard/hosts", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "portal.kaligede.my.id")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Install Agent") || !strings.Contains(body, "--api-url https://portal.kaligede.my.id") {
+		t.Fatalf("expected install command page, got %s", body)
 	}
 }
 
