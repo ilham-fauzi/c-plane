@@ -76,6 +76,42 @@ Health check:
 curl -s http://127.0.0.1:18080/healthz
 ```
 
+## Install the Control Plane
+
+Clone-and-install one-liner:
+
+```bash
+git clone https://github.com/ilham-fauzi/c-plane.git && \
+cd c-plane && \
+sudo bash scripts/install-control-plane.sh
+```
+
+With a custom bind address:
+
+```bash
+git clone https://github.com/ilham-fauzi/c-plane.git && \
+cd c-plane && \
+sudo bash scripts/install-control-plane.sh --addr 127.0.0.1:8080
+```
+
+The installer builds `cmd/cplane`, installs `/usr/local/bin/cplane`, writes `/etc/c-plane/cplane.env`, creates `/var/lib/c-plane`, and starts `cplane.service`.
+
+Default service layout:
+
+```text
+/usr/local/bin/cplane
+/etc/c-plane/cplane.env
+/var/lib/c-plane/cplane.db
+/var/log/c-plane
+/etc/systemd/system/cplane.service
+```
+
+Expose the service through Caddy or Nginx:
+
+```text
+https://deploy.example.com -> http://127.0.0.1:8080
+```
+
 ## Build
 
 ```bash
