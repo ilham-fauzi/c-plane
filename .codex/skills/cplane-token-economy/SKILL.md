@@ -13,10 +13,13 @@ Goal: get enough context to act without repeatedly loading broad files, noisy co
    - `rg --files`
    - `rg -n "<term>" docs src test .`
    - targeted `sed -n 'start,endp' <file>`
-2. For code review or broad changes, use `code-review-graph` if available.
-3. For noisy shell output, use `rtk` if available.
-4. Keep user updates short; keep final answers focused on changed files and verification.
-5. Load `references/tooling.md` only when deciding whether/how to use RTK, code-review-graph, ECC patterns, or caveman-style compression.
+2. NEVER read a full file if it exceeds 100 lines. Always search first, then view files using precise line ranges.
+3. Limit command output sizes: pipe long outputs through `head`, `tail`, or `grep` to avoid context flooding.
+4. Do not list directories repeatedly.
+5. For code review or broad changes, use `code-review-graph` if available.
+6. For noisy shell output, use `rtk` if available.
+7. Keep user updates short; keep final answers focused on changed files and verification.
+8. Load `references/tooling.md` only when deciding whether/how to use RTK, code-review-graph, ECC patterns, or caveman-style compression.
 
 ## Project Defaults
 

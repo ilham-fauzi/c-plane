@@ -5,6 +5,9 @@ Follow the project-local agent guidance in `AGENTS.md`.
 ## Token Economy
 
 - Prefer targeted exploration: `rg --files`, `rg -n`, and short `sed -n` ranges.
+- NEVER read a full file if it exceeds 100 lines. Always search first, then view files using precise line ranges.
+- Limit command output sizes: pipe long outputs through `head`, `tail`, or `grep` to avoid context flooding.
+- Do not list directories repeatedly.
 - Use `rtk` explicitly when available for noisy command output:
   - `rtk git status`
   - `rtk git diff`

@@ -5,6 +5,9 @@ Use token-efficient project exploration by default.
 ## Token Economy
 
 - Start with `rg --files`, targeted `rg -n`, and short `sed -n` ranges before reading whole files.
+- NEVER read a full file if it exceeds 100 lines. Always run `grep_search` or `rg -n` first, then view files using precise line ranges.
+- Limit command output sizes: pipe long outputs through `head`, `tail`, or `grep` to avoid context flooding.
+- Do not list directories (`list_dir`) repeatedly.
 - Prefer compact command wrappers when available:
   - `rtk git status`, `rtk git diff`, `rtk read`, `rtk grep`, `rtk test <cmd>`
   - `code-review-graph build` and graph/blast-radius queries for review or large change analysis

@@ -315,98 +315,261 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+
+	// Determine onboarding state/highlight
+	var step1Class, step2Class, step3Class, step4Class string
+	if len(hosts) == 0 {
+		step1Class = "active-step"
+	} else if len(repos) == 0 {
+		step2Class = "active-step"
+	} else if len(apps) == 0 {
+		step3Class = "active-step"
+	} else {
+		step4Class = "active-step"
+	}
+
 	_, _ = fmt.Fprintf(w, `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>C-Plane</title>
+  <title>C-Plane Control Plane</title>
   <style>
     :root {
-      color-scheme: light dark;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f7fa;
-      color: #15181d;
+      --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+      --bg-primary: #f8fafc;
+      --bg-secondary: #ffffff;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --border-color: #e2e8f0;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --primary-light: #eff6ff;
+      --primary-text: #1e40af;
+      --success: #10b981;
+      --success-light: #ecfdf5;
+      --success-text: #047857;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --radius: 8px;
     }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: #0f172a;
+        --bg-secondary: #1e293b;
+        --text-primary: #f8fafc;
+        --text-secondary: #94a3b8;
+        --border-color: #334155;
+        --primary: #3b82f6;
+        --primary-hover: #60a5fa;
+        --primary-light: #1e3a8a;
+        --primary-text: #93c5fd;
+        --success: #34d399;
+        --success-light: #064e3b;
+        --success-text: #a7f3d0;
+      }
+    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
     }
     main {
-      width: min(1180px, calc(100vw - 32px));
+      width: min(1200px, calc(100vw - 32px));
       margin: 0 auto;
-      padding: 28px 0 48px;
+      padding: 32px 0 64px;
     }
     header {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
-      gap: 18px;
-      margin-bottom: 22px;
-    }
-    h1, h2 {
-      letter-spacing: 0;
+      gap: 20px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 20px;
     }
     h1 {
-      margin: 0 0 6px;
-      font-size: 28px;
-    }
-    h2 {
       margin: 0;
-      font-size: 17px;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.025em;
     }
-    p {
-      margin: 0;
-      color: #56616f;
-      line-height: 1.5;
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--text-secondary);
+      font-size: 14px;
     }
     .status {
-      border: 1px solid #cfd7e2;
-      border-radius: 999px;
-      background: #fff;
-      color: #1f6f43;
-      padding: 7px 12px;
-      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      background: var(--success-light);
+      color: var(--success-text);
+      text-decoration: none;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background-color: var(--success);
+      border-radius: 50%%;
+    }
+    .tabs-nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 8px;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 0;
+      color: var(--text-secondary);
       font-size: 14px;
       font-weight: 600;
+      padding: 8px 16px;
+      cursor: pointer;
+      border-radius: var(--radius);
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .tab-btn:hover {
+      background: var(--primary-light);
+      color: var(--primary-text);
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #fff;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 3fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
     }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 18px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
     }
-    .metric, section {
-      border: 1px solid #d7dce2;
-      border-radius: 8px;
-      background: #ffffff;
-      box-shadow: 0 10px 28px rgba(18, 24, 31, 0.06);
-    }
-    .metric {
+    .metric-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
       padding: 16px;
+      box-shadow: var(--shadow-sm);
     }
-    .metric strong {
+    .metric-card span {
       display: block;
-      margin-top: 8px;
-      font-size: 26px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
-    .metric span {
-      color: #66717f;
-      font-size: 13px;
+    .metric-card strong {
+      display: block;
+      font-size: 28px;
+      font-weight: 800;
+      margin-top: 4px;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
-      margin-bottom: 14px;
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
     }
-    section {
-      overflow: hidden;
+    .card-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 0 16px;
+      letter-spacing: -0.01em;
     }
-    section header {
+    .onboarding {
+      background: var(--primary-light);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .onboarding-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--primary-text);
+      margin: 0 0 12px;
+    }
+    .steps-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .step-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      transition: all 0.2s ease;
+    }
+    .step-item.active-step {
+      border-color: var(--primary);
+      box-shadow: var(--shadow-md);
+      transform: scale(1.01);
+    }
+    .step-number {
+      display: flex;
       align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%%;
+      background: var(--border-color);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .active-step .step-number {
+      background: var(--primary);
+      color: #fff;
+    }
+    .step-content {
+      flex: 1;
+    }
+    .step-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+    .step-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
       margin: 0;
-      padding: 16px;
-      border-bottom: 1px solid #e3e7ed;
     }
     table {
       width: 100%%;
@@ -415,142 +578,117 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     }
     th, td {
       padding: 12px 16px;
-      border-bottom: 1px solid #edf0f4;
+      border-bottom: 1px solid var(--border-color);
       text-align: left;
-      vertical-align: top;
+      vertical-align: middle;
     }
     th {
-      color: #637083;
+      color: var(--text-secondary);
       font-size: 12px;
       font-weight: 600;
       text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
     tr:last-child td {
       border-bottom: 0;
     }
     .empty {
-      padding: 22px 16px;
-      color: #66717f;
-      line-height: 1.5;
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 14px;
     }
     .pill {
       display: inline-block;
-      border-radius: 999px;
-      background: #eef3ff;
-      color: #2453a6;
-      padding: 3px 8px;
+      border-radius: 9999px;
+      padding: 2px 10px;
       font-size: 12px;
       font-weight: 600;
+      text-transform: capitalize;
     }
-    .actions {
+    .pill-info { background: var(--primary-light); color: var(--primary-text); }
+    .pill-success { background: var(--success-light); color: var(--success-text); }
+    .form-container {
+      display: grid;
+      gap: 16px;
+      max-width: 500px;
+    }
+    .form-group {
       display: flex;
-      gap: 10px;
-      margin: 0;
-      flex-wrap: wrap;
+      flex-direction: column;
+      gap: 6px;
     }
-    .button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 34px;
-      border: 1px solid #cbd4df;
-      border-radius: 6px;
-      background: #fff;
-      color: #1e2b3a;
-      padding: 0 12px;
-      font-size: 14px;
-      font-weight: 600;
-    }
-    form {
-      padding: 16px;
-      display: grid;
-      gap: 10px;
-    }
-    label {
-      display: grid;
-      gap: 5px;
-      color: #637083;
+    .form-group label {
       font-size: 12px;
-      font-weight: 600;
+      font-weight: 700;
+      color: var(--text-secondary);
       text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
     input, select {
       width: 100%%;
-      box-sizing: border-box;
-      border: 1px solid #cbd4df;
-      border-radius: 6px;
-      background: #fff;
-      color: #15181d;
-      min-height: 38px;
-      padding: 0 10px;
-      font: inherit;
-      text-transform: none;
+      padding: 10px 14px;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.2s ease;
     }
-    input[type="checkbox"] {
+    input:focus, select:focus {
+      border-color: var(--primary);
+    }
+    .checkbox-group {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox-group input {
       width: auto;
-      min-height: 0;
     }
-    button {
-      min-height: 38px;
+    button, .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 20px;
+      background: var(--primary);
       border: 0;
-      border-radius: 6px;
-      background: #184f9e;
       color: #fff;
-      font: inherit;
-      font-weight: 700;
+      font-weight: 600;
+      font-size: 14px;
+      border-radius: var(--radius);
       cursor: pointer;
-    }
-    .wide {
-      grid-column: 1 / -1;
-    }
-    a {
-      color: inherit;
+      transition: background 0.2s ease;
       text-decoration: none;
     }
+    button:hover, .btn:hover {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+    .btn-secondary:hover {
+      background: var(--bg-primary);
+    }
+    .flex-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .flex-header h2 {
+      margin: 0;
+    }
     code {
-      background: #eef1f5;
+      font-family: monospace;
+      background: var(--bg-primary);
+      padding: 2px 6px;
       border-radius: 4px;
-      padding: 2px 5px;
-    }
-    @media (max-width: 760px) {
-      header, .grid {
-        display: block;
-      }
-      .status {
-        display: inline-block;
-        margin-top: 12px;
-      }
-      .metrics {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      section {
-        margin-bottom: 14px;
-      }
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        background: #101418;
-        color: #f3f5f7;
-      }
-      .metric, section, .status, .button, input, select {
-        background: #161b21;
-        border-color: #2d3640;
-        box-shadow: none;
-        color: #f3f5f7;
-      }
-      p, .metric span, .empty, th {
-        color: #aab4c0;
-      }
-      td, th {
-        border-color: #25303a;
-      }
-      code {
-        background: #222a33;
-      }
-      .pill {
-        background: #20314d;
-        color: #9dbcff;
-      }
+      font-size: 13px;
     }
   </style>
 </head>
@@ -558,102 +696,206 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
   <main>
     <header>
       <div>
-        <h1>C-Plane</h1>
-        <p>Lightweight deployment control plane for self-managed servers.</p>
+        <h1>C-Plane Control Plane</h1>
+        <p class="subtitle">Deploy code instantly to self-managed VPS targets</p>
       </div>
-      <a class="status" href="/healthz">API healthy</a>
+      <a class="status" href="/healthz">
+        <span class="status-dot"></span>
+        API online
+      </a>
     </header>
 
     <div class="metrics">
-      <div class="metric"><span>Hosts</span><strong>%d</strong></div>
-      <div class="metric"><span>Repositories</span><strong>%d</strong></div>
-      <div class="metric"><span>Apps</span><strong>%d</strong></div>
-      <div class="metric"><span>Deployments</span><strong>%d</strong></div>
-      <div class="metric"><span>Audit Events</span><strong>%d</strong></div>
+      <div class="metric-card"><span>Hosts</span><strong>%d</strong></div>
+      <div class="metric-card"><span>Repositories</span><strong>%d</strong></div>
+      <div class="metric-card"><span>Apps</span><strong>%d</strong></div>
+      <div class="metric-card"><span>Deployments</span><strong>%d</strong></div>
+      <div class="metric-card"><span>Audit Events</span><strong>%d</strong></div>
     </div>
 
-    <div class="grid">
-      <section>
-        <header><h2>Add Host</h2></header>
-        %s
-      </section>
+    <nav class="tabs-nav">
+      <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
+      <button class="tab-btn" onclick="switchTab('hosts')">Hosts (%d)</button>
+      <button class="tab-btn" onclick="switchTab('repos')">Repositories (%d)</button>
+      <button class="tab-btn" onclick="switchTab('apps')">Applications (%d)</button>
+      <button class="tab-btn" onclick="switchTab('deployments')">Deployments (%d)</button>
+      <button class="tab-btn" onclick="switchTab('activity')">Activity Log</button>
+    </nav>
 
-      <section>
-        <header><h2>Add Repository</h2></header>
-        %s
-      </section>
+    <!-- TAB: DASHBOARD -->
+    <div id="tab-dashboard" class="tab-content active">
+      <div class="dashboard-grid">
+        <div class="left-panel">
+          <div class="onboarding">
+            <h2 class="onboarding-title">🎯 Getting Started Checklist</h2>
+            <div class="steps-list">
+              <div class="step-item %s">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                  <h3 class="step-title">Add Host Server</h3>
+                  <p class="step-desc">Register your target VPS server. Go to the <strong>Hosts</strong> tab and click "Add Host" to generate your installation command.</p>
+                </div>
+              </div>
+              <div class="step-item %s">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                  <h3 class="step-title">Connect Git Repository</h3>
+                  <p class="step-desc">Connect your application source code. Go to the <strong>Repositories</strong> tab and link a GitHub/GitLab URL.</p>
+                </div>
+              </div>
+              <div class="step-item %s">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                  <h3 class="step-title">Setup Server Application</h3>
+                  <p class="step-desc">Go to the <strong>Applications</strong> tab, configure the project directory, and initialize the application on your target host.</p>
+                </div>
+              </div>
+              <div class="step-item %s">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                  <h3 class="step-title">Trigger Deployment</h3>
+                  <p class="step-desc">Trigger deploys automatically via Git webhooks, or manually queue jobs from the <strong>Deployments</strong> tab.</p>
+                </div>
+              </div>
+            </div>
+          </div>
 
-      <section>
-        <header><h2>Add App</h2></header>
-        %s
-      </section>
+          <div class="card">
+            <h2 class="card-title">Recent Deployments</h2>
+            %s
+          </div>
+        </div>
 
-      <section>
-        <header><h2>Setup Server App</h2></header>
-        %s
-      </section>
-
-      <section>
-        <header><h2>Trigger Deploy</h2></header>
-        %s
-      </section>
+        <div class="right-panel">
+          <div class="card">
+            <h2 class="card-title" style="font-size:16px;">Quick Actions</h2>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <button onclick="switchTab('hosts')" class="btn">Register New Host</button>
+              <button onclick="switchTab('repos')" class="btn btn-secondary">Connect Repository</button>
+              <button onclick="switchTab('apps')" class="btn btn-secondary">Setup New App</button>
+              <button onclick="switchTab('deployments')" class="btn btn-secondary">Trigger Deploy</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="grid">
-      <section>
-        <header>
-          <h2>Hosts</h2>
-          <div class="actions"><a class="button" href="/api/hosts">API</a></div>
-        </header>
+    <!-- TAB: HOSTS -->
+    <div id="tab-hosts" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">Add Target Host</h2>
         %s
-      </section>
+      </div>
+      <div class="card">
+        <div class="flex-header">
+          <h2>Registered Hosts</h2>
+        </div>
+        %s
+      </div>
+    </div>
 
-      <section>
-        <header>
-          <h2>Repositories</h2>
-          <div class="actions"><a class="button" href="/api/repos">API</a></div>
-        </header>
+    <!-- TAB: REPOSITORIES -->
+    <div id="tab-repos" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">Connect Git Repository</h2>
         %s
-      </section>
+      </div>
+      <div class="card">
+        <div class="flex-header">
+          <h2>Connected Repositories</h2>
+        </div>
+        %s
+      </div>
+    </div>
 
-      <section>
-        <header>
-          <h2>Apps</h2>
-          <div class="actions"><a class="button" href="/api/apps">API</a></div>
-        </header>
+    <!-- TAB: APPLICATIONS -->
+    <div id="tab-apps" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">Setup Server Application</h2>
         %s
-      </section>
+      </div>
+      <div class="card">
+        <div class="flex-header">
+          <h2>Configured Applications</h2>
+        </div>
+        %s
+      </div>
+    </div>
 
-      <section>
-        <header>
-          <h2>Deployments</h2>
-          <div class="actions"><a class="button" href="/api/deployments">API</a></div>
-        </header>
+    <!-- TAB: DEPLOYMENTS -->
+    <div id="tab-deployments" class="tab-content">
+      <div class="card">
+        <h2 class="card-title">Trigger Manual Deploy</h2>
         %s
-      </section>
+      </div>
+      <div class="card">
+        <div class="flex-header">
+          <h2>Deployment History</h2>
+        </div>
+        %s
+      </div>
+    </div>
 
-      <section>
-        <header>
-          <h2>Audit Events</h2>
-          <div class="actions"><a class="button" href="/api/audit-events">API</a></div>
-        </header>
+    <!-- TAB: ACTIVITY LOG -->
+    <div id="tab-activity" class="tab-content">
+      <div class="card">
+        <div class="flex-header">
+          <h2>Audit & Activity Events</h2>
+        </div>
         %s
-      </section>
+      </div>
     </div>
   </main>
+
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      
+      const targetContent = document.getElementById('tab-' + tabId);
+      if (targetContent) {
+        targetContent.classList.add('active');
+      }
+      
+      const targetBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+      if (targetBtn) {
+        targetBtn.classList.add('active');
+      }
+      
+      localStorage.setItem('cplane_active_tab', tabId);
+    }
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      const activeTab = localStorage.getItem('cplane_active_tab') || 'dashboard';
+      switchTab(activeTab);
+    });
+  </script>
 </body>
-</html>`, len(hosts), len(repos), len(apps), len(jobs), len(events), renderHostForm(), renderRepoForm(), renderAppForm(hosts, repos), renderSetupAppForm(hosts, repos), renderDeployForm(apps), renderHosts(hosts), renderRepositories(repos), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
+</html>`,
+		len(hosts), len(repos), len(apps), len(jobs), len(events),
+		len(hosts), len(repos), len(apps), len(jobs),
+		step1Class, step2Class, step3Class, step4Class,
+		renderJobs(jobs),
+		renderHostForm(), renderHosts(hosts),
+		renderRepoForm(), renderRepositories(repos),
+		renderSetupAppForm(hosts, repos), renderApps(apps),
+		renderDeployForm(apps), renderJobs(jobs),
+		renderAuditEvents(events))
 }
 
 func renderHosts(hosts []model.Host) string {
 	if len(hosts) == 0 {
-		return `<div class="empty">No hosts registered yet. Create a host through <code>POST /api/hosts</code>, then install the generated agent command on the target server.</div>`
+		return `<div class="empty">No hosts registered yet. Register a host using the form above.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent Version</th></tr></thead><tbody>`)
 	for _, host := range hosts {
-		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><span class="pill">%s</span></td><td>%s</td></tr>`,
-			escape(host.Name), escape(host.ID), escape(host.Status), escape(blank(host.AgentVersion, "not reported")))
+		statusPill := `<span class="pill pill-info">offline</span>`
+		if host.Status == "online" {
+			statusPill = `<span class="pill pill-success">online</span>`
+		}
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
+			escape(host.Name), escape(host.ID), statusPill, escape(blank(host.AgentVersion, "never connected")))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -661,13 +903,13 @@ func renderHosts(hosts []model.Host) string {
 
 func renderRepositories(repos []model.Repository) string {
 	if len(repos) == 0 {
-		return `<div class="empty">No repositories connected yet. Add a Git repository before creating an app.</div>`
+		return `<div class="empty">No repositories connected yet.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Provider</th><th>URL</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Provider</th><th>URL</th><th>Branch</th></tr></thead><tbody>`)
 	for _, repo := range repos {
-		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><span class="pill">%s</span></td><td><code>%s</code></td></tr>`,
-			escape(repo.Name), escape(repo.ID), escape(repo.Provider), escape(repo.URL))
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td><span class="pill pill-info">%s</span></td><td><code>%s</code></td><td><code>%s</code></td></tr>`,
+			escape(repo.Name), escape(repo.ID), escape(repo.Provider), escape(repo.URL), escape(repo.DefaultBranch))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -675,65 +917,52 @@ func renderRepositories(repos []model.Repository) string {
 
 func renderApps(apps []model.App) string {
 	if len(apps) == 0 {
-		return `<div class="empty">No apps configured yet. Apps connect a repository, host, root path, and recipe path.</div>`
+		return `<div class="empty">No applications set up yet.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Root Path</th><th>Host</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Target Host</th><th>Root Path</th></tr></thead><tbody>`)
 	for _, app := range apps {
-		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><code>%s</code></td><td><code>%s</code></td></tr>`,
-			escape(app.Name), escape(app.ID), escape(blank(app.RootPath, "not set")), escape(app.HostID))
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td><code>%s</code></td><td><code>%s</code></td></tr>`,
+			escape(app.Name), escape(app.ID), escape(app.HostID), escape(blank(app.RootPath, "not set")))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
 }
 
 func renderHostForm() string {
-	return `<form method="post" action="/dashboard/hosts">
-  <label>Host Name<input name="name" placeholder="sumopod-prod" required></label>
-  <button type="submit">Create Host</button>
+	return `<form method="post" action="/dashboard/hosts" class="form-container">
+  <div class="form-group">
+    <label>Host Name</label>
+    <input name="name" placeholder="e.g. production-vps-1" required>
+  </div>
+  <button type="submit">Create Host & Get Install Command</button>
 </form>`
 }
 
 func renderRepoForm() string {
-	return `<form method="post" action="/dashboard/repos">
-  <label>Name<input name="name" placeholder="api-al-waqtu" required></label>
-  <label>Provider
+	return `<form method="post" action="/dashboard/repos" class="form-container">
+  <div class="form-group">
+    <label>Name</label>
+    <input name="name" placeholder="e.g. backend-api" required>
+  </div>
+  <div class="form-group">
+    <label>Provider</label>
     <select name="provider">
       <option value="github">GitHub</option>
       <option value="gitlab">GitLab</option>
       <option value="generic">Generic Git</option>
     </select>
-  </label>
-  <label>Repository URL<input name="url" placeholder="https://github.com/org/repo" required></label>
-  <label>Default Branch<input name="default_branch" value="main" required></label>
+  </div>
+  <div class="form-group">
+    <label>Repository URL</label>
+    <input name="url" placeholder="https://github.com/org/repo" required>
+  </div>
+  <div class="form-group">
+    <label>Default Branch</label>
+    <input name="default_branch" value="main" required>
+  </div>
   <button type="submit">Connect Repository</button>
 </form>`
-}
-
-func renderAppForm(hosts []model.Host, repos []model.Repository) string {
-	if len(hosts) == 0 || len(repos) == 0 {
-		return `<div class="empty">Create at least one host and one repository before adding an app.</div>`
-	}
-	var b strings.Builder
-	b.WriteString(`<form method="post" action="/dashboard/apps">
-  <label>App Name<input name="name" placeholder="api-al-waqtu-prod" required></label>
-  <label>Repository<select name="repo_id" required>`)
-	for _, repo := range repos {
-		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(repo.ID), escape(repo.Name))
-	}
-	b.WriteString(`</select></label>
-  <label>Target Host<select name="host_id" required>`)
-	for _, host := range hosts {
-		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(host.ID), escape(host.Name))
-	}
-	b.WriteString(`</select></label>
-  <label>Environment<input name="environment_id" value="production" required></label>
-  <label>Root Path<input name="root_path" placeholder="/var/www/api-al-waqtu" required></label>
-  <label>Recipe Path<input name="recipe_path" placeholder="/opt/c-plane/apps/api-al-waqtu/deploy.yaml" required></label>
-  <label>Successful Releases Keep<input name="successful_releases_keep" value="5" required></label>
-  <button type="submit">Create App</button>
-</form>`)
-	return b.String()
 }
 
 func renderDeployForm(apps []model.App) string {
@@ -741,66 +970,102 @@ func renderDeployForm(apps []model.App) string {
 		return `<div class="empty">Create an app before triggering a deploy.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<form method="post" action="/dashboard/deployments">
-  <label>App<select name="app_id" required>`)
+	b.WriteString(`<form method="post" action="/dashboard/deployments" class="form-container">
+  <div class="form-group">
+    <label>Application</label>
+    <select name="app_id" required>`)
 	for _, app := range apps {
 		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(app.ID), escape(app.Name))
 	}
-	b.WriteString(`</select></label>
-  <label>Ref, Branch, or Tag<input name="ref" value="main" required></label>
-  <label>Commit SHA<input name="commit_sha" placeholder="optional"></label>
-  <button type="submit">Queue Deploy</button>
+	b.WriteString(`</select>
+  </div>
+  <div class="form-group">
+    <label>Ref, Branch, or Tag</label>
+    <input name="ref" value="main" required>
+  </div>
+  <div class="form-group">
+    <label>Commit SHA (Optional)</label>
+    <input name="commit_sha" placeholder="e.g. a1b2c3d4">
+  </div>
+  <button type="submit">Queue Deployment Job</button>
 </form>`)
 	return b.String()
 }
 
 func renderSetupAppForm(hosts []model.Host, repos []model.Repository) string {
 	if len(hosts) == 0 || len(repos) == 0 {
-		return `<div class="empty">Create at least one host and one repository before asking an agent to set up a server app.</div>`
+		return `<div class="empty">Register at least one host and connect one repository before setting up an application.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<form method="post" action="/dashboard/setup-apps">
-  <label>App Name<input name="name" placeholder="api-al-waqtu" required></label>
-  <label>Repository<select name="repo_id" required>`)
+	b.WriteString(`<form method="post" action="/dashboard/setup-apps" class="form-container">
+  <div class="form-group">
+    <label>App Name</label>
+    <input name="name" placeholder="e.g. web-portal" required>
+  </div>
+  <div class="form-group">
+    <label>Source Repository</label>
+    <select name="repo_id" required>`)
 	for _, repo := range repos {
 		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(repo.ID), escape(repo.Name))
 	}
-	b.WriteString(`</select></label>
-  <label>Target Host<select name="host_id" required>`)
+	b.WriteString(`</select>
+  </div>
+  <div class="form-group">
+    <label>Target Host</label>
+    <select name="host_id" required>`)
 	for _, host := range hosts {
 		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(host.ID), escape(host.Name))
 	}
-	b.WriteString(`</select></label>
-  <label>Environment<input name="environment_id" value="production" required></label>
-  <label>Project Root Path<input name="root_path" placeholder="/var/www/api-al-waqtu" required></label>
-  <label>Domain<input name="domain" placeholder="api.example.com"></label>
-  <label>Runtime
+	b.WriteString(`</select>
+  </div>
+  <div class="form-group">
+    <label>Environment</label>
+    <input name="environment_id" value="production" required>
+  </div>
+  <div class="form-group">
+    <label>Project Root Path on Host</label>
+    <input name="root_path" placeholder="e.g. /var/www/web-portal" required>
+  </div>
+  <div class="form-group">
+    <label>Domain Name (Optional)</label>
+    <input name="domain" placeholder="e.g. portal.example.com">
+  </div>
+  <div class="form-group">
+    <label>Runtime Stack</label>
     <select name="runtime">
-      <option value="static">Static</option>
+      <option value="static">Static Site</option>
       <option value="node">Node.js</option>
       <option value="go">Go</option>
       <option value="php">PHP</option>
-      <option value="custom">Custom</option>
+      <option value="custom">Custom (Recipe controlled)</option>
     </select>
-  </label>
-  <label>Deploy Ref<input name="ref" value="main" required></label>
-  <label>Recipe Path<input name="recipe_path" placeholder="/opt/c-plane/apps/api-al-waqtu/deploy.yaml"></label>
-  <label>Successful Releases Keep<input name="successful_releases_keep" value="5" required></label>
-  <label><input type="checkbox" name="nginx_enabled" value="1" checked> Manage Nginx site</label>
-  <button type="submit">Queue Setup Job</button>
+  </div>
+  <div class="form-group">
+    <label>Deploy Ref</label>
+    <input name="ref" value="main" required>
+  </div>
+  <div class="form-group checkbox-group">
+    <input type="checkbox" id="nginx_enabled" name="nginx_enabled" value="1" checked>
+    <label for="nginx_enabled">Automatically manage Nginx configuration</label>
+  </div>
+  <button type="submit">Initialize & Setup Application</button>
 </form>`)
 	return b.String()
 }
 
 func renderJobs(jobs []model.DeploymentJob) string {
 	if len(jobs) == 0 {
-		return `<div class="empty">No deployment jobs yet. Manual deploys and rollback requests will appear here.</div>`
+		return `<div class="empty">No deployment history.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Job</th><th>Action</th><th>Status</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Job ID</th><th>Action</th><th>Ref</th><th>Status</th></tr></thead><tbody>`)
 	for _, job := range jobs {
-		fmt.Fprintf(&b, `<tr><td><code>%s</code><br>%s</td><td>%s</td><td><span class="pill">%s</span></td></tr>`,
-			escape(job.ID), escape(blank(job.Ref, job.CommitSHA)), escape(job.Action), escape(job.Status))
+		statusClass := "pill-info"
+		if job.Status == "success" {
+			statusClass = "pill-success"
+		}
+		fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td><strong>%s</strong></td><td><code>%s</code></td><td><span class="pill %s">%s</span></td></tr>`,
+			escape(job.ID), escape(job.Action), escape(blank(job.Ref, job.CommitSHA)), statusClass, escape(job.Status))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -808,12 +1073,12 @@ func renderJobs(jobs []model.DeploymentJob) string {
 
 func renderAuditEvents(events []model.AuditEvent) string {
 	if len(events) == 0 {
-		return `<div class="empty">No audit events yet. Host registration, deploys, approvals, rollbacks, and agent activity will be recorded here.</div>`
+		return `<div class="empty">No audit events recorded yet.</div>`
 	}
 	var b strings.Builder
 	b.WriteString(`<table><thead><tr><th>Action</th><th>Actor</th><th>Resource</th></tr></thead><tbody>`)
 	for _, event := range events {
-		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s<br><code>%s</code></td><td>%s<br><code>%s</code></td></tr>`,
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong></td><td>%s (<code>%s</code>)</td><td>%s (<code>%s</code>)</td></tr>`,
 			escape(event.Action), escape(event.ActorType), escape(event.ActorID), escape(event.ResourceType), escape(event.ResourceID))
 	}
 	b.WriteString(`</tbody></table>`)
