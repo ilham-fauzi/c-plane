@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -86,6 +87,43 @@ func (s *Store) ListHosts(ctx context.Context) ([]model.Host, error) {
 	return hosts, rows.Err()
 }
 
+func (s *Store) DeleteHost(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM hosts WHERE id = ?`, id).Scan(&status); err != nil {
+		return err
+	}
+	if status == "online" {
+		return fmt.Errorf("%w: host is online", store.ErrConflict)
+	}
+
+	var appCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM apps WHERE host_id = ?`, id).Scan(&appCount); err != nil {
+		return err
+	}
+	if appCount > 0 {
+		return fmt.Errorf("%w: host has applications", store.ErrConflict)
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM hosts WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+
 func (s *Store) RegisterHostAgent(ctx context.Context, hostID, installTokenHash, agentTokenHash, agentVersion string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE hosts
@@ -145,6 +183,41 @@ func (s *Store) ListRepositories(ctx context.Context) ([]model.Repository, error
 		repos = append(repos, repo)
 	}
 	return repos, rows.Err()
+}
+
+func (s *Store) DeleteRepository(ctx context.Context, id string) error {
+	var onlineHostCount int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM apps
+		JOIN hosts ON hosts.id = apps.host_id
+		WHERE apps.repo_id = ? AND hosts.status = 'online'`, id).Scan(&onlineHostCount); err != nil {
+		return err
+	}
+	if onlineHostCount > 0 {
+		return fmt.Errorf("%w: repository is linked to an online host", store.ErrConflict)
+	}
+
+	var appCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM apps WHERE repo_id = ?`, id).Scan(&appCount); err != nil {
+		return err
+	}
+	if appCount > 0 {
+		return fmt.Errorf("%w: repository has applications", store.ErrConflict)
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM repos WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) CreateApp(ctx context.Context, app model.App) (model.App, error) {

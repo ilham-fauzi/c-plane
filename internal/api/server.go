@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -44,7 +45,9 @@ func NewServer(store store.Store) http.Handler {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 	s.mux.HandleFunc("POST /dashboard/hosts", s.handleDashboardCreateHost)
+	s.mux.HandleFunc("POST /dashboard/hosts/{id}/delete", s.handleDashboardDeleteHost)
 	s.mux.HandleFunc("POST /dashboard/repos", s.handleDashboardCreateRepository)
+	s.mux.HandleFunc("POST /dashboard/repos/{id}/delete", s.handleDashboardDeleteRepository)
 	s.mux.HandleFunc("POST /dashboard/apps", s.handleDashboardCreateApp)
 	s.mux.HandleFunc("POST /dashboard/setup-apps", s.handleDashboardSetupApp)
 	s.mux.HandleFunc("POST /dashboard/deployments", s.handleDashboardCreateDeployment)
@@ -52,9 +55,11 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/hosts", s.handleListHosts)
 	s.mux.HandleFunc("POST /api/hosts", s.handleCreateHost)
+	s.mux.HandleFunc("DELETE /api/hosts/{id}", s.handleDeleteHost)
 
 	s.mux.HandleFunc("GET /api/repos", s.handleListRepositories)
 	s.mux.HandleFunc("POST /api/repos", s.handleCreateRepository)
+	s.mux.HandleFunc("DELETE /api/repos/{id}", s.handleDeleteRepository)
 
 	s.mux.HandleFunc("GET /api/apps", s.handleListApps)
 	s.mux.HandleFunc("POST /api/apps", s.handleCreateApp)
@@ -104,6 +109,15 @@ func (s *Server) handleDashboardCreateHost(w http.ResponseWriter, r *http.Reques
 	writeInstallCommandPage(w, created)
 }
 
+func (s *Server) handleDashboardDeleteHost(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteHost(r.Context(), r.PathValue("id")); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "host.deleted", "host", r.PathValue("id"), "")
+	redirectDashboard(w, r)
+}
+
 func (s *Server) handleDashboardCreateRepository(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid form")
@@ -132,6 +146,15 @@ func (s *Server) handleDashboardCreateRepository(w http.ResponseWriter, r *http.
 		return
 	}
 	s.recordAudit(r, "user", actor(r), "repo.created", "repo", created.ID, "")
+	redirectDashboard(w, r)
+}
+
+func (s *Server) handleDashboardDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteRepository(r.Context(), r.PathValue("id")); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "repo.deleted", "repo", r.PathValue("id"), "")
 	redirectDashboard(w, r)
 }
 
@@ -674,6 +697,20 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     .btn-secondary:hover {
       background: var(--bg-primary);
     }
+    .btn-danger {
+      background: #dc2626;
+    }
+    .btn-danger:hover {
+      background: #b91c1c;
+    }
+    .btn-small {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .inline-form {
+      display: inline-flex;
+      margin: 0;
+    }
     .flex-header {
       display: flex;
       align-items: center;
@@ -888,14 +925,14 @@ func renderHosts(hosts []model.Host) string {
 		return `<div class="empty">No hosts registered yet. Register a host using the form above.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent Version</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent Version</th><th>Action</th></tr></thead><tbody>`)
 	for _, host := range hosts {
 		statusPill := `<span class="pill pill-info">offline</span>`
 		if host.Status == "online" {
 			statusPill = `<span class="pill pill-success">online</span>`
 		}
-		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td>%s</td><td>%s</td></tr>`,
-			escape(host.Name), escape(host.ID), statusPill, escape(blank(host.AgentVersion, "never connected")))
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td>%s</td><td>%s</td><td><form method="post" action="/dashboard/hosts/%s/delete" class="inline-form"><button type="submit" class="btn-danger btn-small">Delete</button></form></td></tr>`,
+			escape(host.Name), escape(host.ID), statusPill, escape(blank(host.AgentVersion, "never connected")), escape(host.ID))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -906,10 +943,10 @@ func renderRepositories(repos []model.Repository) string {
 		return `<div class="empty">No repositories connected yet.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Provider</th><th>URL</th><th>Branch</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Provider</th><th>URL</th><th>Branch</th><th>Action</th></tr></thead><tbody>`)
 	for _, repo := range repos {
-		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td><span class="pill pill-info">%s</span></td><td><code>%s</code></td><td><code>%s</code></td></tr>`,
-			escape(repo.Name), escape(repo.ID), escape(repo.Provider), escape(repo.URL), escape(repo.DefaultBranch))
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td><span class="pill pill-info">%s</span></td><td><code>%s</code></td><td><code>%s</code></td><td><form method="post" action="/dashboard/repos/%s/delete" class="inline-form"><button type="submit" class="btn-danger btn-small">Delete</button></form></td></tr>`,
+			escape(repo.Name), escape(repo.ID), escape(repo.Provider), escape(repo.URL), escape(repo.DefaultBranch), escape(repo.ID))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -1209,6 +1246,16 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, hosts)
 }
 
+func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
+	hostID := r.PathValue("id")
+	if err := s.store.DeleteHost(r.Context(), hostID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "host.deleted", "host", hostID, "")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleCreateRepository(w http.ResponseWriter, r *http.Request) {
 	var repo model.Repository
 	if !decodeJSON(w, r, &repo) {
@@ -1241,6 +1288,16 @@ func (s *Server) handleListRepositories(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, repos)
+}
+
+func (s *Server) handleDeleteRepository(w http.ResponseWriter, r *http.Request) {
+	repoID := r.PathValue("id")
+	if err := s.store.DeleteRepository(r.Context(), repoID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "repo.deleted", "repo", repoID, "")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) {
@@ -1559,6 +1616,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeStoreError(w http.ResponseWriter, err error) {
 	if sqlitestore.IsNotFound(err) {
 		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

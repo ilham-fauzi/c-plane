@@ -219,6 +219,110 @@ func TestAgentHeartbeatAuditKeepsLastFivePerHost(t *testing.T) {
 	}
 }
 
+func TestDeleteHostRejectsOnlineHost(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	host := postJSON[model.Host](t, handler, "/api/hosts", map[string]string{"name": "sumopod-prod"})
+	postJSON[map[string]string](t, handler, "/api/agent/register", map[string]string{
+		"host_id":       host.ID,
+		"install_token": host.InstallToken,
+		"agent_version": "0.1.0",
+	})
+
+	resp := deleteRaw(t, handler, "/api/hosts/"+host.ID)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected conflict deleting online host, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestDeleteHostRemovesOfflineHost(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	host := postJSON[model.Host](t, handler, "/api/hosts", map[string]string{"name": "sumopod-idle"})
+
+	resp := deleteRaw(t, handler, "/api/hosts/"+host.ID)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected no content deleting offline host, got %d: %s", resp.Code, resp.Body.String())
+	}
+	hosts := getJSON[[]model.Host](t, handler, "/api/hosts")
+	if len(hosts) != 0 {
+		t.Fatalf("expected host to be deleted, got %#v", hosts)
+	}
+}
+
+func TestDeleteRepositoryRejectsOnlineLinkedHost(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	host := postJSON[model.Host](t, handler, "/api/hosts", map[string]string{"name": "sumopod-prod"})
+	postJSON[map[string]string](t, handler, "/api/agent/register", map[string]string{
+		"host_id":       host.ID,
+		"install_token": host.InstallToken,
+		"agent_version": "0.1.0",
+	})
+	repo := postJSON[model.Repository](t, handler, "/api/repos", map[string]string{
+		"name": "sumopod",
+		"url":  "https://github.com/example/sumopod",
+	})
+	postJSON[model.App](t, handler, "/api/apps", map[string]any{
+		"name":        "sumopod-prod",
+		"repo_id":     repo.ID,
+		"host_id":     host.ID,
+		"root_path":   "/var/www/sumopod",
+		"recipe_path": "/opt/c-plane/apps/sumopod/deploy.yaml",
+	})
+
+	resp := deleteRaw(t, handler, "/api/repos/"+repo.ID)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected conflict deleting repository linked to online host, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestDeleteRepositoryRemovesUnusedRepository(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	repo := postJSON[model.Repository](t, handler, "/api/repos", map[string]string{
+		"name": "sumopod",
+		"url":  "https://github.com/example/sumopod",
+	})
+
+	resp := deleteRaw(t, handler, "/api/repos/"+repo.ID)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected no content deleting repository, got %d: %s", resp.Code, resp.Body.String())
+	}
+	repos := getJSON[[]model.Repository](t, handler, "/api/repos")
+	if len(repos) != 0 {
+		t.Fatalf("expected repository to be deleted, got %#v", repos)
+	}
+}
+
 func TestEmptyListsReturnArrays(t *testing.T) {
 	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
 	if err != nil {
@@ -285,6 +389,14 @@ func postRaw(t *testing.T, handler http.Handler, path string, body any) *httptes
 	}
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func deleteRaw(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, path, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec

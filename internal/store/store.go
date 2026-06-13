@@ -2,8 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ilham/c-plane/internal/model"
+)
+
+var (
+	ErrConflict = errors.New("resource conflict")
 )
 
 type Store interface {
@@ -11,11 +16,13 @@ type Store interface {
 
 	CreateHost(ctx context.Context, host model.Host) (model.Host, error)
 	ListHosts(ctx context.Context) ([]model.Host, error)
+	DeleteHost(ctx context.Context, id string) error
 	RegisterHostAgent(ctx context.Context, hostID, installTokenHash, agentTokenHash, agentVersion string) error
 	UpdateHostHeartbeat(ctx context.Context, hostID, agentVersion string) error
 
 	CreateRepository(ctx context.Context, repo model.Repository) (model.Repository, error)
 	ListRepositories(ctx context.Context) ([]model.Repository, error)
+	DeleteRepository(ctx context.Context, id string) error
 
 	CreateApp(ctx context.Context, app model.App) (model.App, error)
 	ListApps(ctx context.Context) ([]model.App, error)
