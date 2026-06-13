@@ -95,6 +95,32 @@ func TestDashboardRoot(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "C-Plane") {
 		t.Fatalf("expected dashboard body to mention C-Plane")
 	}
+	if !strings.Contains(rec.Body.String(), "No hosts registered yet") {
+		t.Fatalf("expected dashboard to render host empty state")
+	}
+}
+
+func TestEmptyListsReturnArrays(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	for _, path := range []string{"/api/hosts", "/api/repos", "/api/apps", "/api/deployments", "/api/audit-events"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s expected 200, got %d", path, rec.Code)
+		}
+		if strings.TrimSpace(rec.Body.String()) != "[]" {
+			t.Fatalf("GET %s expected empty array, got %q", path, strings.TrimSpace(rec.Body.String()))
+		}
+	}
 }
 
 func TestAppRetentionMinimum(t *testing.T) {

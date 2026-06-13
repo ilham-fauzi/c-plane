@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"html"
 	"net/http"
 	"strings"
 
@@ -77,9 +79,30 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	hosts, err := s.store.ListHosts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	apps, err := s.store.ListApps(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jobs, err := s.store.ListDeploymentJobs(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	events, err := s.store.ListAuditEvents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`<!doctype html>
+	_, _ = fmt.Fprintf(w, `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -89,42 +112,143 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     :root {
       color-scheme: light dark;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f6f7f9;
+      background: #f5f7fa;
       color: #15181d;
     }
     body {
       margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
     }
     main {
-      width: min(720px, calc(100vw - 32px));
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    h1, h2 {
+      letter-spacing: 0;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+    }
+    h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+    p {
+      margin: 0;
+      color: #56616f;
+      line-height: 1.5;
+    }
+    .status {
+      border: 1px solid #cfd7e2;
+      border-radius: 999px;
+      background: #fff;
+      color: #1f6f43;
+      padding: 7px 12px;
+      white-space: nowrap;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric, section {
       border: 1px solid #d7dce2;
       border-radius: 8px;
       background: #ffffff;
-      padding: 28px;
-      box-shadow: 0 16px 40px rgba(18, 24, 31, 0.08);
+      box-shadow: 0 10px 28px rgba(18, 24, 31, 0.06);
     }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 28px;
-      letter-spacing: 0;
+    .metric {
+      padding: 16px;
     }
-    p {
-      margin: 0 0 18px;
-      color: #4d5662;
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 26px;
+    }
+    .metric span {
+      color: #66717f;
+      font-size: 13px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    section {
+      overflow: hidden;
+    }
+    section header {
+      align-items: center;
+      margin: 0;
+      padding: 16px;
+      border-bottom: 1px solid #e3e7ed;
+    }
+    table {
+      width: 100%%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #edf0f4;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: #637083;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    tr:last-child td {
+      border-bottom: 0;
+    }
+    .empty {
+      padding: 22px 16px;
+      color: #66717f;
       line-height: 1.5;
     }
-    ul {
-      margin: 0;
-      padding-left: 20px;
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      background: #eef3ff;
+      color: #2453a6;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 600;
     }
-    li {
-      margin: 8px 0;
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin: 0;
+      flex-wrap: wrap;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border: 1px solid #cbd4df;
+      border-radius: 6px;
+      background: #fff;
+      color: #1e2b3a;
+      padding: 0 12px;
+      font-size: 14px;
+      font-weight: 600;
     }
     a {
-      color: #1659d1;
+      color: inherit;
       text-decoration: none;
     }
     code {
@@ -132,43 +256,167 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
       border-radius: 4px;
       padding: 2px 5px;
     }
+    @media (max-width: 760px) {
+      header, .grid {
+        display: block;
+      }
+      .status {
+        display: inline-block;
+        margin-top: 12px;
+      }
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      section {
+        margin-bottom: 14px;
+      }
+    }
     @media (prefers-color-scheme: dark) {
       :root {
         background: #101418;
         color: #f3f5f7;
       }
-      main {
+      .metric, section, .status, .button {
         background: #161b21;
         border-color: #2d3640;
         box-shadow: none;
       }
-      p {
+      p, .metric span, .empty, th {
         color: #aab4c0;
+      }
+      td, th {
+        border-color: #25303a;
       }
       code {
         background: #222a33;
       }
-      a {
-        color: #7ba7ff;
+      .pill {
+        background: #20314d;
+        color: #9dbcff;
       }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>C-Plane</h1>
-    <p>The control plane API is running. The full dashboard UI has not been implemented yet.</p>
-    <ul>
-      <li><a href="/healthz">Health check</a></li>
-      <li><a href="/api/hosts">Hosts API</a></li>
-      <li><a href="/api/repos">Repositories API</a></li>
-      <li><a href="/api/apps">Apps API</a></li>
-      <li><a href="/api/deployments">Deployments API</a></li>
-      <li><a href="/api/audit-events">Audit events API</a></li>
-    </ul>
+    <header>
+      <div>
+        <h1>C-Plane</h1>
+        <p>Lightweight deployment control plane for self-managed servers.</p>
+      </div>
+      <a class="status" href="/healthz">API healthy</a>
+    </header>
+
+    <div class="metrics">
+      <div class="metric"><span>Hosts</span><strong>%d</strong></div>
+      <div class="metric"><span>Apps</span><strong>%d</strong></div>
+      <div class="metric"><span>Deployments</span><strong>%d</strong></div>
+      <div class="metric"><span>Audit Events</span><strong>%d</strong></div>
+    </div>
+
+    <div class="grid">
+      <section>
+        <header>
+          <h2>Hosts</h2>
+          <div class="actions"><a class="button" href="/api/hosts">API</a></div>
+        </header>
+        %s
+      </section>
+
+      <section>
+        <header>
+          <h2>Apps</h2>
+          <div class="actions"><a class="button" href="/api/apps">API</a></div>
+        </header>
+        %s
+      </section>
+
+      <section>
+        <header>
+          <h2>Deployments</h2>
+          <div class="actions"><a class="button" href="/api/deployments">API</a></div>
+        </header>
+        %s
+      </section>
+
+      <section>
+        <header>
+          <h2>Audit Events</h2>
+          <div class="actions"><a class="button" href="/api/audit-events">API</a></div>
+        </header>
+        %s
+      </section>
+    </div>
   </main>
 </body>
-</html>`))
+</html>`, len(hosts), len(apps), len(jobs), len(events), renderHosts(hosts), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
+}
+
+func renderHosts(hosts []model.Host) string {
+	if len(hosts) == 0 {
+		return `<div class="empty">No hosts registered yet. Create a host through <code>POST /api/hosts</code>, then install the generated agent command on the target server.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent</th></tr></thead><tbody>`)
+	for _, host := range hosts {
+		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><span class="pill">%s</span></td><td>%s</td></tr>`,
+			escape(host.Name), escape(host.ID), escape(host.Status), escape(blank(host.AgentVersion, "not reported")))
+	}
+	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
+func renderApps(apps []model.App) string {
+	if len(apps) == 0 {
+		return `<div class="empty">No apps configured yet. Apps connect a repository, host, root path, and recipe path.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Root Path</th><th>Host</th></tr></thead><tbody>`)
+	for _, app := range apps {
+		fmt.Fprintf(&b, `<tr><td>%s<br><code>%s</code></td><td><code>%s</code></td><td><code>%s</code></td></tr>`,
+			escape(app.Name), escape(app.ID), escape(blank(app.RootPath, "not set")), escape(app.HostID))
+	}
+	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
+func renderJobs(jobs []model.DeploymentJob) string {
+	if len(jobs) == 0 {
+		return `<div class="empty">No deployment jobs yet. Manual deploys and rollback requests will appear here.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<table><thead><tr><th>Job</th><th>Action</th><th>Status</th></tr></thead><tbody>`)
+	for _, job := range jobs {
+		fmt.Fprintf(&b, `<tr><td><code>%s</code><br>%s</td><td>%s</td><td><span class="pill">%s</span></td></tr>`,
+			escape(job.ID), escape(blank(job.Ref, job.CommitSHA)), escape(job.Action), escape(job.Status))
+	}
+	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
+func renderAuditEvents(events []model.AuditEvent) string {
+	if len(events) == 0 {
+		return `<div class="empty">No audit events yet. Host registration, deploys, approvals, rollbacks, and agent activity will be recorded here.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<table><thead><tr><th>Action</th><th>Actor</th><th>Resource</th></tr></thead><tbody>`)
+	for _, event := range events {
+		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s<br><code>%s</code></td><td>%s<br><code>%s</code></td></tr>`,
+			escape(event.Action), escape(event.ActorType), escape(event.ActorID), escape(event.ResourceType), escape(event.ResourceID))
+	}
+	b.WriteString(`</tbody></table>`)
+	return b.String()
+}
+
+func blank(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func escape(value string) string {
+	return html.EscapeString(value)
 }
 
 func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {

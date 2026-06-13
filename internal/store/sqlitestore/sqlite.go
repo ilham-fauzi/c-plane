@@ -64,7 +64,7 @@ func (s *Store) ListHosts(ctx context.Context) ([]model.Host, error) {
 	}
 	defer rows.Close()
 
-	var hosts []model.Host
+	hosts := make([]model.Host, 0)
 	for rows.Next() {
 		var host model.Host
 		if err := rows.Scan(&host.ID, &host.Name, &host.Status, &host.LastSeenAt, &host.AgentVersion, &host.MQTTUsername, &host.AgentTokenHash, &host.CreatedAt, &host.UpdatedAt); err != nil {
@@ -125,7 +125,7 @@ func (s *Store) ListRepositories(ctx context.Context) ([]model.Repository, error
 	}
 	defer rows.Close()
 
-	var repos []model.Repository
+	repos := make([]model.Repository, 0)
 	for rows.Next() {
 		var repo model.Repository
 		if err := rows.Scan(&repo.ID, &repo.Name, &repo.Provider, &repo.URL, &repo.DefaultBranch, &repo.WebhookSecretHash, &repo.CreatedAt, &repo.UpdatedAt); err != nil {
@@ -162,7 +162,7 @@ func (s *Store) ListApps(ctx context.Context) ([]model.App, error) {
 	}
 	defer rows.Close()
 
-	var apps []model.App
+	apps := make([]model.App, 0)
 	for rows.Next() {
 		app, err := scanApp(rows)
 		if err != nil {
@@ -300,7 +300,7 @@ func (s *Store) ListAuditEvents(ctx context.Context) ([]model.AuditEvent, error)
 	}
 	defer rows.Close()
 
-	var events []model.AuditEvent
+	events := make([]model.AuditEvent, 0)
 	for rows.Next() {
 		var event model.AuditEvent
 		if err := rows.Scan(&event.ID, &event.ActorType, &event.ActorID, &event.Action, &event.ResourceType, &event.ResourceID, &event.MetadataJSON, &event.IPAddress, &event.CreatedAt); err != nil {
@@ -329,7 +329,7 @@ func (s *Store) queryJobs(ctx context.Context, query string, args ...any) ([]mod
 	}
 	defer rows.Close()
 
-	var jobs []model.DeploymentJob
+	jobs := make([]model.DeploymentJob, 0)
 	for rows.Next() {
 		job, err := scanJob(rows)
 		if err != nil {
@@ -357,7 +357,7 @@ func scanJob(row scanner) (model.DeploymentJob, error) {
 }
 
 func scanReleases(rows *sql.Rows) ([]model.Release, error) {
-	var releases []model.Release
+	releases := make([]model.Release, 0)
 	for rows.Next() {
 		release, err := scanRelease(rows)
 		if err != nil {
