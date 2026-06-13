@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS deployment_jobs (
 	artifact_url TEXT NOT NULL DEFAULT '',
 	artifact_checksum TEXT NOT NULL DEFAULT '',
 	release_id TEXT NOT NULL DEFAULT '',
+	metadata_json TEXT NOT NULL DEFAULT '',
 	requested_by TEXT NOT NULL DEFAULT '',
 	approved_by TEXT NOT NULL DEFAULT '',
 	started_at TIMESTAMP,

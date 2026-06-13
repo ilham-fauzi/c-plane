@@ -42,15 +42,16 @@ Implemented:
 - Host, repository, app, deployment job, release, log, and audit models.
 - Agent registration endpoint.
 - Agent heartbeat and polling endpoints.
-- MVP `cplane-agent` binary with register, heartbeat, polling, and placeholder job completion.
+- MVP dashboard for hosts, repositories, apps, setup jobs, deploy jobs, and audit events.
+- MVP `cplane-agent` binary with register, heartbeat, polling, setup-app execution, and placeholder deploy completion.
 - Agent installer script for server-level installation.
+- Server app setup job that prepares dynamic app roots, initial release/current/shared folders, recipe placeholders, and optional Nginx sites.
 - Release retention fields and rollback job creation.
 
 Not implemented yet:
 
 - Real recipe execution.
 - MQTT signaling.
-- Dashboard UI.
 - GitHub webhook validation.
 - Agent token enforcement middleware.
 - Binary release/download endpoint.
@@ -146,7 +147,8 @@ curl -fsSLo install-agent.sh https://deploy.example.com/install-agent.sh
 sudo bash install-agent.sh \
   --api-url https://deploy.example.com \
   --host-id srv_xxx \
-  --token install_xxx
+  --token install_xxx \
+  --run-as-root
 ```
 
 For local testing with a locally built binary:
@@ -156,10 +158,31 @@ sudo bash scripts/install-agent.sh \
   --api-url http://127.0.0.1:18080 \
   --host-id srv_xxx \
   --token install_xxx \
-  --binary-path ./cplane-agent
+  --binary-path ./cplane-agent \
+  --run-as-root
 ```
 
 The installer writes the one-time install token first, runs `cplane-agent register`, exchanges it for a runtime agent token, then starts `cplane-agent.service`.
+
+Use `--run-as-root` when the agent must create app folders under protected paths such as `/var/www` and manage `/etc/nginx/sites-available`. Omit it only when the target app roots and recipes are writable by the `cplane` system user and Nginx is managed outside C-Plane.
+
+## Server App Setup Flow
+
+The dashboard can queue a server setup job after a host and repository exist:
+
+1. Create a host and install the generated global agent command on the target server.
+2. Add the repository URL.
+3. Submit `Setup Server App` with target host, repository, app name, dynamic project root path, domain, runtime, ref, recipe path, and Nginx setting.
+4. The control plane creates the app record and queues a `setup_app` deployment job.
+5. The global agent picks up the job, prepares `<app_root>/releases/initial`, `<app_root>/current`, `<app_root>/shared`, writes the recipe placeholder, and optionally writes/enables the Nginx site.
+
+Example dynamic roots:
+
+```text
+/var/www/api-al-waqtu
+/var/www/kaligede
+/srv/apps/backend
+```
 
 ## Dynamic App Roots
 

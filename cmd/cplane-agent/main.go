@@ -7,11 +7,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,12 +40,23 @@ type Client struct {
 }
 
 type DeploymentJob struct {
-	ID        string `json:"id"`
-	AppID     string `json:"app_id"`
-	HostID    string `json:"host_id"`
-	Action    string `json:"action"`
-	Status    string `json:"status"`
-	ReleaseID string `json:"release_id,omitempty"`
+	ID           string `json:"id"`
+	AppID        string `json:"app_id"`
+	HostID       string `json:"host_id"`
+	Action       string `json:"action"`
+	Status       string `json:"status"`
+	Ref          string `json:"ref,omitempty"`
+	ReleaseID    string `json:"release_id,omitempty"`
+	MetadataJSON string `json:"metadata_json,omitempty"`
+}
+
+type SetupAppMetadata struct {
+	AppName      string `json:"app_name"`
+	RootPath     string `json:"root_path"`
+	Domain       string `json:"domain,omitempty"`
+	Runtime      string `json:"runtime"`
+	RecipePath   string `json:"recipe_path"`
+	NginxEnabled bool   `json:"nginx_enabled"`
 }
 
 func main() {
@@ -198,9 +212,148 @@ func (c *Client) handleJob(ctx context.Context, job DeploymentJob) error {
 	if err := c.doJSON(ctx, http.MethodPost, "/api/agent/jobs/"+job.ID+"/start?host_id="+c.config.HostID, nil, nil); err != nil {
 		return err
 	}
-	c.uploadLog(ctx, job.ID, "Job accepted by cplane-agent MVP executor")
-	c.uploadLog(ctx, job.ID, "Action "+job.Action+" is not executing recipes yet")
+	c.uploadLog(ctx, job.ID, "Job accepted by cplane-agent executor")
+
+	var err error
+	switch job.Action {
+	case "setup_app":
+		err = c.handleSetupApp(ctx, job)
+	default:
+		c.uploadLog(ctx, job.ID, "Action "+job.Action+" is queued, but recipe execution is not implemented yet")
+	}
+	if err != nil {
+		c.uploadLog(ctx, job.ID, "Job failed: "+err.Error())
+		failErr := c.doJSON(ctx, http.MethodPost, "/api/agent/jobs/"+job.ID+"/fail?host_id="+c.config.HostID, nil, nil)
+		if failErr != nil {
+			return fmt.Errorf("%w; additionally failed to mark job failed: %v", err, failErr)
+		}
+		return err
+	}
 	return c.doJSON(ctx, http.MethodPost, "/api/agent/jobs/"+job.ID+"/complete?host_id="+c.config.HostID, nil, nil)
+}
+
+func (c *Client) handleSetupApp(ctx context.Context, job DeploymentJob) error {
+	var metadata SetupAppMetadata
+	if strings.TrimSpace(job.MetadataJSON) == "" {
+		return errors.New("setup_app metadata is required")
+	}
+	if err := json.Unmarshal([]byte(job.MetadataJSON), &metadata); err != nil {
+		return fmt.Errorf("decode setup_app metadata: %w", err)
+	}
+	if metadata.AppName == "" {
+		return errors.New("app_name is required")
+	}
+	if !filepath.IsAbs(metadata.RootPath) {
+		return errors.New("root_path must be absolute")
+	}
+	if metadata.RecipePath == "" {
+		metadata.RecipePath = filepath.Join("/opt/c-plane/apps", metadata.AppName, "deploy.yaml")
+	}
+	if !filepath.IsAbs(metadata.RecipePath) {
+		return errors.New("recipe_path must be absolute")
+	}
+
+	initialRelease := filepath.Join(metadata.RootPath, "releases", "initial")
+	sharedDir := filepath.Join(metadata.RootPath, "shared")
+	currentPath := filepath.Join(metadata.RootPath, "current")
+	for _, dir := range []string{metadata.RootPath, initialRelease, sharedDir, filepath.Dir(metadata.RecipePath)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+		c.uploadLog(ctx, job.ID, "Ensured directory "+dir)
+	}
+	if err := writeIfMissing(filepath.Join(initialRelease, "index.html"), []byte("<!doctype html><title>C-Plane App</title><h1>"+html.EscapeString(metadata.AppName)+"</h1>\n"), 0o644); err != nil {
+		return fmt.Errorf("write initial index: %w", err)
+	}
+	if err := ensureSymlink(currentPath, filepath.Join("releases", "initial")); err != nil {
+		return fmt.Errorf("create current symlink: %w", err)
+	}
+	if err := writeIfMissing(metadata.RecipePath, []byte(defaultRecipe(metadata)), 0o644); err != nil {
+		return fmt.Errorf("write recipe: %w", err)
+	}
+	c.uploadLog(ctx, job.ID, "Prepared app root "+metadata.RootPath)
+	c.uploadLog(ctx, job.ID, "Prepared recipe "+metadata.RecipePath)
+
+	if metadata.NginxEnabled {
+		if strings.TrimSpace(metadata.Domain) == "" {
+			return errors.New("domain is required when nginx_enabled is true")
+		}
+		if err := writeNginxSite(ctx, job.ID, c.uploadLog, metadata); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeIfMissing(path string, content []byte, perm os.FileMode) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(path, content, perm)
+}
+
+func ensureSymlink(linkPath, target string) error {
+	if current, err := os.Readlink(linkPath); err == nil {
+		if current == target {
+			return nil
+		}
+		return fmt.Errorf("%s already points to %s", linkPath, current)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Symlink(target, linkPath)
+}
+
+func defaultRecipe(metadata SetupAppMetadata) string {
+	return fmt.Sprintf(`# C-Plane deploy recipe for %s
+runtime: %s
+root_path: %s
+deploy:
+  build: []
+  publish: current
+`, metadata.AppName, blank(metadata.Runtime, "static"), metadata.RootPath)
+}
+
+func writeNginxSite(ctx context.Context, jobID string, uploadLog func(context.Context, string, string), metadata SetupAppMetadata) error {
+	domain := strings.TrimSpace(metadata.Domain)
+	if strings.ContainsAny(domain, " /\\;") {
+		return errors.New("domain contains invalid characters")
+	}
+	if strings.ContainsAny(metadata.RootPath, "\n\r;") {
+		return errors.New("root_path contains invalid characters for nginx")
+	}
+	siteAvailable := filepath.Join("/etc/nginx/sites-available", domain+".conf")
+	siteEnabled := filepath.Join("/etc/nginx/sites-enabled", domain+".conf")
+	config := fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+
+    root %s/current;
+    index index.html index.htm;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+`, domain, metadata.RootPath)
+	if err := os.WriteFile(siteAvailable, []byte(config), 0o644); err != nil {
+		return fmt.Errorf("write nginx site %s: %w", siteAvailable, err)
+	}
+	if err := ensureSymlink(siteEnabled, siteAvailable); err != nil {
+		return fmt.Errorf("enable nginx site: %w", err)
+	}
+	uploadLog(ctx, jobID, "Wrote nginx site "+siteAvailable)
+	if out, err := exec.CommandContext(ctx, "nginx", "-t").CombinedOutput(); err != nil {
+		return fmt.Errorf("nginx -t failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	uploadLog(ctx, jobID, "nginx -t passed")
+	if out, err := exec.CommandContext(ctx, "systemctl", "reload", "nginx").CombinedOutput(); err != nil {
+		return fmt.Errorf("reload nginx failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	uploadLog(ctx, jobID, "Reloaded nginx")
+	return nil
 }
 
 func (c *Client) uploadLog(ctx context.Context, jobID, message string) {
@@ -325,6 +478,13 @@ func writeSecret(path, value string) error {
 		return err
 	}
 	return nil
+}
+
+func blank(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func usage() {

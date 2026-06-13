@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ilham/c-plane/internal/model"
@@ -37,7 +38,17 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, schema)
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	return s.addColumnIfMissing(ctx, "deployment_jobs", "metadata_json", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (s *Store) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
+	_, err := s.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return nil
+	}
 	return err
 }
 
@@ -193,23 +204,23 @@ func (s *Store) CreateDeploymentJob(ctx context.Context, job model.DeploymentJob
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO deployment_jobs (
 			id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url,
-			artifact_checksum, release_id, requested_by, approved_by, started_at, finished_at, created_at, updated_at
+			artifact_checksum, release_id, metadata_json, requested_by, approved_by, started_at, finished_at, created_at, updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.ID, job.AppID, job.HostID, job.RepoID, job.Action, job.Status, job.Ref, job.CommitSHA, job.ArtifactURL,
-		job.ArtifactChecksum, job.ReleaseID, job.RequestedBy, job.ApprovedBy, job.StartedAt, job.FinishedAt, job.CreatedAt, job.UpdatedAt)
+		job.ArtifactChecksum, job.ReleaseID, job.MetadataJSON, job.RequestedBy, job.ApprovedBy, job.StartedAt, job.FinishedAt, job.CreatedAt, job.UpdatedAt)
 	return job, err
 }
 
 func (s *Store) ListDeploymentJobs(ctx context.Context) ([]model.DeploymentJob, error) {
 	return s.queryJobs(ctx, `
-		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, requested_by, approved_by, started_at, finished_at, created_at, updated_at
+		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, metadata_json, requested_by, approved_by, started_at, finished_at, created_at, updated_at
 		FROM deployment_jobs ORDER BY created_at DESC`)
 }
 
 func (s *Store) GetDeploymentJob(ctx context.Context, id string) (model.DeploymentJob, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, requested_by, approved_by, started_at, finished_at, created_at, updated_at
+		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, metadata_json, requested_by, approved_by, started_at, finished_at, created_at, updated_at
 		FROM deployment_jobs WHERE id = ?`, id)
 	return scanJob(row)
 }
@@ -245,7 +256,7 @@ func (s *Store) CancelDeploymentJob(ctx context.Context, id string) error {
 
 func (s *Store) ListPendingJobs(ctx context.Context, hostID string) ([]model.DeploymentJob, error) {
 	return s.queryJobs(ctx, `
-		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, requested_by, approved_by, started_at, finished_at, created_at, updated_at
+		SELECT id, app_id, host_id, repo_id, action, status, ref, commit_sha, artifact_url, artifact_checksum, release_id, metadata_json, requested_by, approved_by, started_at, finished_at, created_at, updated_at
 		FROM deployment_jobs WHERE host_id = ? AND status IN ('queued', 'signaled') ORDER BY created_at ASC`, hostID)
 }
 
@@ -352,7 +363,7 @@ func scanApp(row scanner) (model.App, error) {
 
 func scanJob(row scanner) (model.DeploymentJob, error) {
 	var job model.DeploymentJob
-	err := row.Scan(&job.ID, &job.AppID, &job.HostID, &job.RepoID, &job.Action, &job.Status, &job.Ref, &job.CommitSHA, &job.ArtifactURL, &job.ArtifactChecksum, &job.ReleaseID, &job.RequestedBy, &job.ApprovedBy, &job.StartedAt, &job.FinishedAt, &job.CreatedAt, &job.UpdatedAt)
+	err := row.Scan(&job.ID, &job.AppID, &job.HostID, &job.RepoID, &job.Action, &job.Status, &job.Ref, &job.CommitSHA, &job.ArtifactURL, &job.ArtifactChecksum, &job.ReleaseID, &job.MetadataJSON, &job.RequestedBy, &job.ApprovedBy, &job.StartedAt, &job.FinishedAt, &job.CreatedAt, &job.UpdatedAt)
 	return job, err
 }
 

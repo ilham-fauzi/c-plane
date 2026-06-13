@@ -128,6 +128,63 @@ func TestDashboardCreateHostShowsInstallCommand(t *testing.T) {
 	if !strings.Contains(body, "Install Agent") || !strings.Contains(body, "--api-url https://portal.kaligede.my.id") {
 		t.Fatalf("expected install command page, got %s", body)
 	}
+	if !strings.Contains(body, "--run-as-root") {
+		t.Fatalf("expected root-capable agent install command, got %s", body)
+	}
+}
+
+func TestDashboardSetupAppQueuesSetupJob(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	host := postJSON[model.Host](t, handler, "/api/hosts", map[string]string{"name": "sumopod-prod"})
+	repo := postJSON[model.Repository](t, handler, "/api/repos", map[string]string{
+		"name": "api-al-waqtu",
+		"url":  "https://github.com/example/api-al-waqtu",
+	})
+
+	form := url.Values{
+		"name":                     {"api-al-waqtu"},
+		"repo_id":                  {repo.ID},
+		"host_id":                  {host.ID},
+		"environment_id":           {"production"},
+		"root_path":                {"/var/www/api-al-waqtu"},
+		"domain":                   {"api.example.com"},
+		"runtime":                  {"static"},
+		"ref":                      {"main"},
+		"recipe_path":              {"/opt/c-plane/apps/api-al-waqtu/deploy.yaml"},
+		"successful_releases_keep": {"5"},
+		"nginx_enabled":            {"1"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/dashboard/setup-apps", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	apps := getJSON[[]model.App](t, handler, "/api/apps")
+	if len(apps) != 1 || apps[0].RootPath != "/var/www/api-al-waqtu" {
+		t.Fatalf("expected setup app to be created, got %#v", apps)
+	}
+	jobs := getJSON[[]model.DeploymentJob](t, handler, "/api/deployments")
+	if len(jobs) != 1 || jobs[0].Action != "setup_app" || jobs[0].Status != "queued" {
+		t.Fatalf("expected setup_app job, got %#v", jobs)
+	}
+	var metadata setupAppMetadata
+	if err := json.Unmarshal([]byte(jobs[0].MetadataJSON), &metadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if metadata.Domain != "api.example.com" || metadata.RootPath != "/var/www/api-al-waqtu" || !metadata.NginxEnabled {
+		t.Fatalf("metadata mismatch: %#v", metadata)
+	}
 }
 
 func TestEmptyListsReturnArrays(t *testing.T) {

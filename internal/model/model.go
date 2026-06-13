@@ -53,6 +53,7 @@ type DeploymentJob struct {
 	ArtifactURL      string     `json:"artifact_url,omitempty"`
 	ArtifactChecksum string     `json:"artifact_checksum,omitempty"`
 	ReleaseID        string     `json:"release_id,omitempty"`
+	MetadataJSON     string     `json:"metadata_json,omitempty"`
 	RequestedBy      string     `json:"requested_by,omitempty"`
 	ApprovedBy       string     `json:"approved_by,omitempty"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`

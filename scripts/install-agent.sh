@@ -14,6 +14,7 @@ APPS_DIR="/opt/c-plane/apps"
 SERVICE_NAME="cplane-agent"
 POLL_INTERVAL_SECONDS="15"
 REGISTER="1"
+RUN_AS_ROOT="0"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ Options:
   --log-dir PATH                Default: /var/log/c-plane-agent
   --apps-dir PATH               Default: /opt/c-plane/apps
   --poll-interval-seconds N     Default: 15
+  --run-as-root                 Run the agent service as root for app and Nginx setup jobs.
   --skip-register               Install files but do not exchange install token.
   -h, --help                    Show help.
 EOF
@@ -47,6 +49,7 @@ while [ "$#" -gt 0 ]; do
     --log-dir) LOG_DIR="${2:-}"; shift 2 ;;
     --apps-dir) APPS_DIR="${2:-}"; shift 2 ;;
     --poll-interval-seconds) POLL_INTERVAL_SECONDS="${2:-}"; shift 2 ;;
+    --run-as-root) RUN_AS_ROOT="1"; shift ;;
     --skip-register) REGISTER="0"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
@@ -144,6 +147,11 @@ chmod 0600 "$CONFIG_DIR/agent.token"
 chown -R cplane:cplane "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "$APPS_DIR" 2>/dev/null || true
 
 if command -v systemctl >/dev/null 2>&1; then
+  SERVICE_USER_LINES="User=cplane
+Group=cplane"
+  if [ "$RUN_AS_ROOT" = "1" ]; then
+    SERVICE_USER_LINES=""
+  fi
   cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=C-Plane Agent
@@ -152,8 +160,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=cplane
-Group=cplane
+$SERVICE_USER_LINES
 ExecStart=$AGENT_BIN run --config $CONFIG_DIR/agent.toml
 Restart=always
 RestartSec=5

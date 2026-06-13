@@ -23,6 +23,15 @@ type Server struct {
 
 const agentInstallerURL = "https://raw.githubusercontent.com/ilham-fauzi/c-plane/main/scripts/install-agent.sh"
 
+type setupAppMetadata struct {
+	AppName      string `json:"app_name"`
+	RootPath     string `json:"root_path"`
+	Domain       string `json:"domain,omitempty"`
+	Runtime      string `json:"runtime"`
+	RecipePath   string `json:"recipe_path"`
+	NginxEnabled bool   `json:"nginx_enabled"`
+}
+
 func NewServer(store store.Store) http.Handler {
 	server := &Server{
 		store: store,
@@ -37,6 +46,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /dashboard/hosts", s.handleDashboardCreateHost)
 	s.mux.HandleFunc("POST /dashboard/repos", s.handleDashboardCreateRepository)
 	s.mux.HandleFunc("POST /dashboard/apps", s.handleDashboardCreateApp)
+	s.mux.HandleFunc("POST /dashboard/setup-apps", s.handleDashboardSetupApp)
 	s.mux.HandleFunc("POST /dashboard/deployments", s.handleDashboardCreateDeployment)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 
@@ -162,6 +172,78 @@ func (s *Server) handleDashboardCreateApp(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.recordAudit(r, "user", actor(r), "app.created", "app", created.ID, "")
+	redirectDashboard(w, r)
+}
+
+func (s *Server) handleDashboardSetupApp(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	keep, err := strconv.Atoi(blank(r.FormValue("successful_releases_keep"), "5"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "successful_releases_keep must be a number")
+		return
+	}
+	app := model.App{
+		ID:                     id.New("app"),
+		Name:                   strings.TrimSpace(r.FormValue("name")),
+		RepoID:                 strings.TrimSpace(r.FormValue("repo_id")),
+		HostID:                 strings.TrimSpace(r.FormValue("host_id")),
+		EnvironmentID:          strings.TrimSpace(r.FormValue("environment_id")),
+		RootPath:               strings.TrimSpace(r.FormValue("root_path")),
+		RecipePath:             strings.TrimSpace(r.FormValue("recipe_path")),
+		SuccessfulReleasesKeep: keep,
+	}
+	if app.Name == "" || app.RepoID == "" || app.HostID == "" || app.RootPath == "" {
+		writeError(w, http.StatusBadRequest, "name, repo_id, host_id, and root_path are required")
+		return
+	}
+	if app.EnvironmentID == "" {
+		app.EnvironmentID = "production"
+	}
+	if app.RecipePath == "" {
+		app.RecipePath = "/opt/c-plane/apps/" + app.Name + "/deploy.yaml"
+	}
+	if app.SuccessfulReleasesKeep < 3 {
+		writeError(w, http.StatusBadRequest, "successful_releases_keep must be at least 3")
+		return
+	}
+	createdApp, err := s.store.CreateApp(r.Context(), app)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	metadata := setupAppMetadata{
+		AppName:      createdApp.Name,
+		RootPath:     createdApp.RootPath,
+		Domain:       strings.TrimSpace(r.FormValue("domain")),
+		Runtime:      blank(r.FormValue("runtime"), "static"),
+		RecipePath:   createdApp.RecipePath,
+		NginxEnabled: r.FormValue("nginx_enabled") == "1",
+	}
+	rawMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	job := model.DeploymentJob{
+		ID:           id.New("job"),
+		AppID:        createdApp.ID,
+		HostID:       createdApp.HostID,
+		RepoID:       createdApp.RepoID,
+		Action:       "setup_app",
+		Status:       "queued",
+		Ref:          blank(r.FormValue("ref"), "main"),
+		MetadataJSON: string(rawMetadata),
+		RequestedBy:  actor(r),
+	}
+	createdJob, err := s.store.CreateDeploymentJob(r.Context(), job)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.recordAudit(r, "user", actor(r), "app.setup_requested", "app", createdApp.ID, `{"job_id":"`+createdJob.ID+`"}`)
 	redirectDashboard(w, r)
 }
 
@@ -404,6 +486,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
       font: inherit;
       text-transform: none;
     }
+    input[type="checkbox"] {
+      width: auto;
+      min-height: 0;
+    }
     button {
       min-height: 38px;
       border: 0;
@@ -503,6 +589,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
       </section>
 
       <section>
+        <header><h2>Setup Server App</h2></header>
+        %s
+      </section>
+
+      <section>
         <header><h2>Trigger Deploy</h2></header>
         %s
       </section>
@@ -551,7 +642,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
     </div>
   </main>
 </body>
-</html>`, len(hosts), len(repos), len(apps), len(jobs), len(events), renderHostForm(), renderRepoForm(), renderAppForm(hosts, repos), renderDeployForm(apps), renderHosts(hosts), renderRepositories(repos), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
+</html>`, len(hosts), len(repos), len(apps), len(jobs), len(events), renderHostForm(), renderRepoForm(), renderAppForm(hosts, repos), renderSetupAppForm(hosts, repos), renderDeployForm(apps), renderHosts(hosts), renderRepositories(repos), renderApps(apps), renderJobs(jobs), renderAuditEvents(events))
 }
 
 func renderHosts(hosts []model.Host) string {
@@ -663,6 +754,44 @@ func renderDeployForm(apps []model.App) string {
 	return b.String()
 }
 
+func renderSetupAppForm(hosts []model.Host, repos []model.Repository) string {
+	if len(hosts) == 0 || len(repos) == 0 {
+		return `<div class="empty">Create at least one host and one repository before asking an agent to set up a server app.</div>`
+	}
+	var b strings.Builder
+	b.WriteString(`<form method="post" action="/dashboard/setup-apps">
+  <label>App Name<input name="name" placeholder="api-al-waqtu" required></label>
+  <label>Repository<select name="repo_id" required>`)
+	for _, repo := range repos {
+		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(repo.ID), escape(repo.Name))
+	}
+	b.WriteString(`</select></label>
+  <label>Target Host<select name="host_id" required>`)
+	for _, host := range hosts {
+		fmt.Fprintf(&b, `<option value="%s">%s</option>`, escape(host.ID), escape(host.Name))
+	}
+	b.WriteString(`</select></label>
+  <label>Environment<input name="environment_id" value="production" required></label>
+  <label>Project Root Path<input name="root_path" placeholder="/var/www/api-al-waqtu" required></label>
+  <label>Domain<input name="domain" placeholder="api.example.com"></label>
+  <label>Runtime
+    <select name="runtime">
+      <option value="static">Static</option>
+      <option value="node">Node.js</option>
+      <option value="go">Go</option>
+      <option value="php">PHP</option>
+      <option value="custom">Custom</option>
+    </select>
+  </label>
+  <label>Deploy Ref<input name="ref" value="main" required></label>
+  <label>Recipe Path<input name="recipe_path" placeholder="/opt/c-plane/apps/api-al-waqtu/deploy.yaml"></label>
+  <label>Successful Releases Keep<input name="successful_releases_keep" value="5" required></label>
+  <label><input type="checkbox" name="nginx_enabled" value="1" checked> Manage Nginx site</label>
+  <button type="submit">Queue Setup Job</button>
+</form>`)
+	return b.String()
+}
+
 func renderJobs(jobs []model.DeploymentJob) string {
 	if len(jobs) == 0 {
 		return `<div class="empty">No deployment jobs yet. Manual deploys and rollback requests will appear here.</div>`
@@ -710,7 +839,7 @@ func (s *Server) createHost(r *http.Request, name string) (model.Host, error) {
 	hostID := id.New("srv")
 	installToken := id.New("install")
 	baseURL := externalBaseURL(r)
-	installCommand := "curl -fsSLo install-agent.sh " + agentInstallerURL + " && sudo bash install-agent.sh --api-url " + baseURL + " --host-id " + hostID + " --token " + installToken
+	installCommand := "curl -fsSLo install-agent.sh " + agentInstallerURL + " && sudo bash install-agent.sh --api-url " + baseURL + " --host-id " + hostID + " --token " + installToken + " --run-as-root"
 	host := model.Host{
 		ID:             hostID,
 		Name:           name,

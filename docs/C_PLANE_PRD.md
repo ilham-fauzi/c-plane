@@ -247,6 +247,33 @@ staging   -> staging
 tag v*    -> production release
 ```
 
+### 10.2.1 Setup Server App
+
+The host agent is installed once at server level and can manage multiple apps on that host. An app setup flow binds one repository to one host and one dynamic project root.
+
+1. Admin installs the global agent on the target host.
+2. Admin adds or selects a repository.
+3. Admin opens the dashboard setup form.
+4. Admin selects host and repository.
+5. Admin enters app name, environment, root path, domain, runtime, deploy ref, recipe path, release retention, and Nginx management preference.
+6. Control plane creates the app record.
+7. Control plane creates a `setup_app` job with structured metadata.
+8. Agent fetches the job over HTTPS.
+9. Agent prepares the app root, release directories, shared directory, current symlink, and recipe placeholder.
+10. If Nginx management is enabled, agent writes the site config, enables it, validates Nginx, and reloads Nginx.
+11. Agent uploads logs and marks the job success or failed.
+
+The setup job must support dynamic roots such as:
+
+```text
+/var/www/api-al-waqtu
+/var/www/kaligede
+/var/apps/api-prod
+/srv/apps/backend
+```
+
+The agent should run with only the privileges needed for the selected host operations. Managing `/var/www` and `/etc/nginx` usually requires a root service or a narrowly scoped privileged helper.
+
 ### 10.3 Deploy from Git Webhook
 
 1. Git provider sends webhook to control plane.
