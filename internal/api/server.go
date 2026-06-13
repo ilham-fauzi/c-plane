@@ -28,6 +28,7 @@ func NewServer(store store.Store) http.Handler {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /", s.handleDashboard)
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 
 	s.mux.HandleFunc("GET /api/hosts", s.handleListHosts)
@@ -69,6 +70,105 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C-Plane</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #15181d;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+    main {
+      width: min(720px, calc(100vw - 32px));
+      border: 1px solid #d7dce2;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 28px;
+      box-shadow: 0 16px 40px rgba(18, 24, 31, 0.08);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0 0 18px;
+      color: #4d5662;
+      line-height: 1.5;
+    }
+    ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 8px 0;
+    }
+    a {
+      color: #1659d1;
+      text-decoration: none;
+    }
+    code {
+      background: #eef1f5;
+      border-radius: 4px;
+      padding: 2px 5px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #101418;
+        color: #f3f5f7;
+      }
+      main {
+        background: #161b21;
+        border-color: #2d3640;
+        box-shadow: none;
+      }
+      p {
+        color: #aab4c0;
+      }
+      code {
+        background: #222a33;
+      }
+      a {
+        color: #7ba7ff;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>C-Plane</h1>
+    <p>The control plane API is running. The full dashboard UI has not been implemented yet.</p>
+    <ul>
+      <li><a href="/healthz">Health check</a></li>
+      <li><a href="/api/hosts">Hosts API</a></li>
+      <li><a href="/api/repos">Repositories API</a></li>
+      <li><a href="/api/apps">Apps API</a></li>
+      <li><a href="/api/deployments">Deployments API</a></li>
+      <li><a href="/api/audit-events">Audit events API</a></li>
+    </ul>
+  </main>
+</body>
+</html>`))
 }
 
 func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {

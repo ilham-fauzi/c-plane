@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ilham/c-plane/internal/model"
@@ -72,6 +73,27 @@ func TestDeploymentLifecycle(t *testing.T) {
 	pending := getJSON[[]model.DeploymentJob](t, handler, "/api/agent/jobs/pending?host_id="+host.ID)
 	if len(pending) != 1 || pending[0].ID != job.ID {
 		t.Fatalf("pending jobs mismatch: %#v", pending)
+	}
+}
+
+func TestDashboardRoot(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "C-Plane") {
+		t.Fatalf("expected dashboard body to mention C-Plane")
 	}
 }
 
