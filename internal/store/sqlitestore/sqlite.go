@@ -330,6 +330,27 @@ func (s *Store) RecordAudit(ctx context.Context, event model.AuditEvent) error {
 		INSERT INTO audit_events (id, actor_type, actor_id, action, resource_type, resource_id, metadata_json, ip_address, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.ActorType, event.ActorID, event.Action, event.ResourceType, event.ResourceID, event.MetadataJSON, event.IPAddress, event.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if event.Action == "agent.heartbeat" && event.ResourceType == "host" && event.ResourceID != "" {
+		return s.pruneHeartbeatAudit(ctx, event.ResourceID, 5)
+	}
+	return nil
+}
+
+func (s *Store) pruneHeartbeatAudit(ctx context.Context, hostID string, keep int) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM audit_events
+		WHERE id IN (
+			SELECT id
+			FROM audit_events
+			WHERE action = 'agent.heartbeat'
+			  AND resource_type = 'host'
+			  AND resource_id = ?
+			ORDER BY created_at DESC, id DESC
+			LIMIT -1 OFFSET ?
+		)`, hostID, keep)
 	return err
 }
 

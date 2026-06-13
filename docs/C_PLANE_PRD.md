@@ -796,6 +796,7 @@ created_at
 - Artifact checksum must be verified when artifact deployment is used.
 - Webhook signatures must be verified.
 - Audit log must record deploy, rollback, approval, host registration, token rotation, and failed auth.
+- Heartbeat audit noise must be bounded. Keep only the last 5 `agent.heartbeat` audit events per host and automatically delete older heartbeat audit events.
 
 ## 18. Observability
 

@@ -187,6 +187,38 @@ func TestDashboardSetupAppQueuesSetupJob(t *testing.T) {
 	}
 }
 
+func TestAgentHeartbeatAuditKeepsLastFivePerHost(t *testing.T) {
+	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	handler := NewServer(store)
+	host := postJSON[model.Host](t, handler, "/api/hosts", map[string]string{"name": "sumopod-prod"})
+	for i := 0; i < 8; i++ {
+		postJSON[map[string]string](t, handler, "/api/agent/heartbeat", map[string]any{
+			"host_id":       host.ID,
+			"agent_version": "0.1.0",
+			"status":        "online",
+			"running_jobs":  0,
+		})
+	}
+
+	events := getJSON[[]model.AuditEvent](t, handler, "/api/audit-events")
+	heartbeatCount := 0
+	for _, event := range events {
+		if event.Action == "agent.heartbeat" && event.ResourceID == host.ID {
+			heartbeatCount++
+		}
+	}
+	if heartbeatCount != 5 {
+		t.Fatalf("expected 5 heartbeat audit events, got %d in %#v", heartbeatCount, events)
+	}
+}
+
 func TestEmptyListsReturnArrays(t *testing.T) {
 	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "cplane.db"))
 	if err != nil {

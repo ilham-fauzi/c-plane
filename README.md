@@ -42,6 +42,7 @@ Implemented:
 - Host, repository, app, deployment job, release, log, and audit models.
 - Agent registration endpoint.
 - Agent heartbeat and polling endpoints.
+- Heartbeat audit retention keeps only the last 5 heartbeat events per host.
 - MVP dashboard for hosts, repositories, apps, setup jobs, deploy jobs, and audit events.
 - MVP `cplane-agent` binary with register, heartbeat, polling, setup-app execution, and placeholder deploy completion.
 - Agent installer script for server-level installation.
