@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ilham/c-plane/internal/id"
 	"github.com/ilham/c-plane/internal/model"
@@ -925,14 +926,14 @@ func renderHosts(hosts []model.Host) string {
 		return `<div class="empty">No hosts registered yet. Register a host using the form above.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Agent Version</th><th>Action</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Name</th><th>Status</th><th>Last Seen</th><th>Agent Version</th><th>Action</th></tr></thead><tbody>`)
 	for _, host := range hosts {
 		statusPill := `<span class="pill pill-info">offline</span>`
 		if host.Status == "online" {
 			statusPill = `<span class="pill pill-success">online</span>`
 		}
-		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td>%s</td><td>%s</td><td><form method="post" action="/dashboard/hosts/%s/delete" class="inline-form"><button type="submit" class="btn-danger btn-small">Delete</button></form></td></tr>`,
-			escape(host.Name), escape(host.ID), statusPill, escape(blank(host.AgentVersion, "never connected")), escape(host.ID))
+		fmt.Fprintf(&b, `<tr><td><strong>%s</strong><br><code>%s</code></td><td>%s</td><td><code>%s</code></td><td>%s</td><td><form method="post" action="/dashboard/hosts/%s/delete" class="inline-form"><button type="submit" class="btn-danger btn-small">Delete</button></form></td></tr>`,
+			escape(host.Name), escape(host.ID), statusPill, escape(formatOptionalTime(host.LastSeenAt, "Never")), escape(blank(host.AgentVersion, "never connected")), escape(host.ID))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -1113,10 +1114,10 @@ func renderAuditEvents(events []model.AuditEvent) string {
 		return `<div class="empty">No audit events recorded yet.</div>`
 	}
 	var b strings.Builder
-	b.WriteString(`<table><thead><tr><th>Action</th><th>Actor</th><th>Resource</th></tr></thead><tbody>`)
+	b.WriteString(`<table><thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Resource</th></tr></thead><tbody>`)
 	for _, event := range events {
-		fmt.Fprintf(&b, `<tr><td><strong>%s</strong></td><td>%s (<code>%s</code>)</td><td>%s (<code>%s</code>)</td></tr>`,
-			escape(event.Action), escape(event.ActorType), escape(event.ActorID), escape(event.ResourceType), escape(event.ResourceID))
+		fmt.Fprintf(&b, `<tr><td><code>%s</code></td><td><strong>%s</strong></td><td>%s (<code>%s</code>)</td><td>%s (<code>%s</code>)</td></tr>`,
+			escape(formatTime(event.CreatedAt)), escape(event.Action), escape(event.ActorType), escape(event.ActorID), escape(event.ResourceType), escape(event.ResourceID))
 	}
 	b.WriteString(`</tbody></table>`)
 	return b.String()
@@ -1127,6 +1128,20 @@ func blank(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func formatOptionalTime(value *time.Time, fallback string) string {
+	if value == nil || value.IsZero() {
+		return fallback
+	}
+	return formatTime(*value)
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return "Never"
+	}
+	return value.UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
 func escape(value string) string {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ilham/c-plane/internal/model"
 	"github.com/ilham/c-plane/internal/store/sqlitestore"
@@ -101,6 +102,32 @@ func TestDashboardRoot(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Add Host") || !strings.Contains(rec.Body.String(), "Trigger Deploy") {
 		t.Fatalf("expected dashboard to render CICD action forms")
+	}
+}
+
+func TestDashboardRenderersIncludeTimestamps(t *testing.T) {
+	now := time.Date(2026, 6, 13, 10, 4, 5, 0, time.UTC)
+	hostsHTML := renderHosts([]model.Host{{
+		ID:           "srv_test",
+		Name:         "test-host",
+		Status:       "online",
+		LastSeenAt:   &now,
+		AgentVersion: "0.1.0",
+	}})
+	if !strings.Contains(hostsHTML, "Last Seen") || !strings.Contains(hostsHTML, "2026-06-13 10:04:05 UTC") {
+		t.Fatalf("expected host table to render last seen timestamp: %s", hostsHTML)
+	}
+
+	auditHTML := renderAuditEvents([]model.AuditEvent{{
+		Action:       "agent.heartbeat",
+		ActorType:    "agent",
+		ActorID:      "srv_test",
+		ResourceType: "host",
+		ResourceID:   "srv_test",
+		CreatedAt:    now,
+	}})
+	if !strings.Contains(auditHTML, "<th>Time</th>") || !strings.Contains(auditHTML, "2026-06-13 10:04:05 UTC") {
+		t.Fatalf("expected audit table to render event timestamp: %s", auditHTML)
 	}
 }
 

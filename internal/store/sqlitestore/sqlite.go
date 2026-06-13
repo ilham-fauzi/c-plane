@@ -19,6 +19,8 @@ type Store struct {
 
 var _ store.Store = (*Store)(nil)
 
+const hostHeartbeatStaleAfter = 60 * time.Second
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -68,6 +70,9 @@ func (s *Store) CreateHost(ctx context.Context, host model.Host) (model.Host, er
 }
 
 func (s *Store) ListHosts(ctx context.Context) ([]model.Host, error) {
+	if err := s.markStaleHostsOffline(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, status, last_seen_at, agent_version, mqtt_username, agent_token_hash, created_at, updated_at
 		FROM hosts ORDER BY created_at DESC`)
@@ -88,6 +93,9 @@ func (s *Store) ListHosts(ctx context.Context) ([]model.Host, error) {
 }
 
 func (s *Store) DeleteHost(ctx context.Context, id string) error {
+	if err := s.markStaleHostsOffline(ctx); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -186,6 +194,9 @@ func (s *Store) ListRepositories(ctx context.Context) ([]model.Repository, error
 }
 
 func (s *Store) DeleteRepository(ctx context.Context, id string) error {
+	if err := s.markStaleHostsOffline(ctx); err != nil {
+		return err
+	}
 	var onlineHostCount int
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -481,6 +492,17 @@ func scanRelease(row scanner) (model.Release, error) {
 
 func nowUTC() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
+}
+
+func (s *Store) markStaleHostsOffline(ctx context.Context) error {
+	cutoff := nowUTC().Add(-hostHeartbeatStaleAfter)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE hosts
+		SET status = 'offline', updated_at = ?
+		WHERE status = 'online'
+		  AND (last_seen_at IS NULL OR last_seen_at < ?)`,
+		nowUTC(), cutoff)
+	return err
 }
 
 func IsNotFound(err error) bool {
