@@ -34,6 +34,21 @@ type setupAppMetadata struct {
 	NginxEnabled bool   `json:"nginx_enabled"`
 }
 
+type deployMetadata struct {
+	AppName    string `json:"app_name"`
+	RootPath   string `json:"root_path"`
+	RecipePath string `json:"recipe_path"`
+	RepoURL    string `json:"repo_url"`
+	Ref        string `json:"ref"`
+}
+
+type completeJobRequest struct {
+	ReleaseKey       string `json:"release_key"`
+	ReleasePath      string `json:"release_path"`
+	CommitSHA        string `json:"commit_sha"`
+	ArtifactChecksum string `json:"artifact_checksum"`
+}
+
 func NewServer(store store.Store) http.Handler {
 	server := &Server{
 		store: store,
@@ -286,16 +301,37 @@ func (s *Server) handleDashboardCreateDeployment(w http.ResponseWriter, r *http.
 		writeStoreError(w, err)
 		return
 	}
+	repo, err := s.store.GetRepository(r.Context(), app.RepoID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	ref := strings.TrimSpace(r.FormValue("ref"))
+	if ref == "" {
+		ref = repo.DefaultBranch
+	}
+	metadata, err := json.Marshal(deployMetadata{
+		AppName:    app.Name,
+		RootPath:   app.RootPath,
+		RecipePath: app.RecipePath,
+		RepoURL:    repo.URL,
+		Ref:        ref,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	job := model.DeploymentJob{
-		ID:          id.New("job"),
-		AppID:       app.ID,
-		HostID:      app.HostID,
-		RepoID:      app.RepoID,
-		Action:      "deploy",
-		Status:      "queued",
-		Ref:         strings.TrimSpace(r.FormValue("ref")),
-		CommitSHA:   strings.TrimSpace(r.FormValue("commit_sha")),
-		RequestedBy: actor(r),
+		ID:           id.New("job"),
+		AppID:        app.ID,
+		HostID:       app.HostID,
+		RepoID:       app.RepoID,
+		Action:       "deploy",
+		Status:       "queued",
+		Ref:          ref,
+		CommitSHA:    strings.TrimSpace(r.FormValue("commit_sha")),
+		MetadataJSON: string(metadata),
+		RequestedBy:  actor(r),
 	}
 	created, err := s.store.CreateDeploymentJob(r.Context(), job)
 	if err != nil {
@@ -1364,9 +1400,32 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
+	repo, err := s.store.GetRepository(r.Context(), app.RepoID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if strings.TrimSpace(job.Ref) == "" {
+		job.Ref = repo.DefaultBranch
+	}
+	if strings.TrimSpace(job.Action) == "" {
+		job.Action = "deploy"
+	}
+	metadata, err := json.Marshal(deployMetadata{
+		AppName:    app.Name,
+		RootPath:   app.RootPath,
+		RecipePath: app.RecipePath,
+		RepoURL:    repo.URL,
+		Ref:        job.Ref,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	job.ID = id.New("job")
 	job.HostID = app.HostID
 	job.RepoID = app.RepoID
+	job.MetadataJSON = string(metadata)
 	if job.RequestedBy == "" {
 		job.RequestedBy = actor(r)
 	}
@@ -1542,6 +1601,38 @@ func (s *Server) handleAgentStartJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentCompleteJob(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	job, err := s.store.GetDeploymentJob(r.Context(), jobID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	var input completeJobRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+	}
+	if input.ReleasePath != "" || input.ReleaseKey != "" {
+		now := time.Now().UTC()
+		releaseKey := blank(input.ReleaseKey, jobID)
+		_, err := s.store.CreateRelease(r.Context(), model.Release{
+			ID:                   id.New("rel"),
+			AppID:                job.AppID,
+			DeploymentJobID:      job.ID,
+			ReleaseKey:           releaseKey,
+			CommitSHA:            blank(input.CommitSHA, job.CommitSHA),
+			ArtifactChecksum:     input.ArtifactChecksum,
+			Path:                 input.ReleasePath,
+			Status:               "active",
+			AvailableForRollback: true,
+			ActivatedAt:          &now,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	s.agentSetJobStatus(w, r, "success", "agent.job_completed")
 }
 

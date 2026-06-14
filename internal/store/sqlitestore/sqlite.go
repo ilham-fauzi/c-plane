@@ -193,6 +193,15 @@ func (s *Store) ListRepositories(ctx context.Context) ([]model.Repository, error
 	return repos, rows.Err()
 }
 
+func (s *Store) GetRepository(ctx context.Context, id string) (model.Repository, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, provider, url, default_branch, webhook_secret_hash, created_at, updated_at
+		FROM repos WHERE id = ?`, id)
+	var repo model.Repository
+	err := row.Scan(&repo.ID, &repo.Name, &repo.Provider, &repo.URL, &repo.DefaultBranch, &repo.WebhookSecretHash, &repo.CreatedAt, &repo.UpdatedAt)
+	return repo, err
+}
+
 func (s *Store) DeleteRepository(ctx context.Context, id string) error {
 	if err := s.markStaleHostsOffline(ctx); err != nil {
 		return err

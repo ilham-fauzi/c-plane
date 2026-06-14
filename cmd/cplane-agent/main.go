@@ -46,6 +46,7 @@ type DeploymentJob struct {
 	Action       string `json:"action"`
 	Status       string `json:"status"`
 	Ref          string `json:"ref,omitempty"`
+	CommitSHA    string `json:"commit_sha,omitempty"`
 	ReleaseID    string `json:"release_id,omitempty"`
 	MetadataJSON string `json:"metadata_json,omitempty"`
 }
@@ -57,6 +58,21 @@ type SetupAppMetadata struct {
 	Runtime      string `json:"runtime"`
 	RecipePath   string `json:"recipe_path"`
 	NginxEnabled bool   `json:"nginx_enabled"`
+}
+
+type DeployMetadata struct {
+	AppName    string `json:"app_name"`
+	RootPath   string `json:"root_path"`
+	RecipePath string `json:"recipe_path"`
+	RepoURL    string `json:"repo_url"`
+	Ref        string `json:"ref"`
+}
+
+type CompleteJobRequest struct {
+	ReleaseKey       string `json:"release_key"`
+	ReleasePath      string `json:"release_path"`
+	CommitSHA        string `json:"commit_sha"`
+	ArtifactChecksum string `json:"artifact_checksum"`
 }
 
 func main() {
@@ -215,11 +231,14 @@ func (c *Client) handleJob(ctx context.Context, job DeploymentJob) error {
 	c.uploadLog(ctx, job.ID, "Job accepted by cplane-agent executor")
 
 	var err error
+	var completeBody any
 	switch job.Action {
 	case "setup_app":
 		err = c.handleSetupApp(ctx, job)
+	case "deploy":
+		completeBody, err = c.handleDeploy(ctx, job)
 	default:
-		c.uploadLog(ctx, job.ID, "Action "+job.Action+" is queued, but recipe execution is not implemented yet")
+		err = fmt.Errorf("unsupported job action %q", job.Action)
 	}
 	if err != nil {
 		c.uploadLog(ctx, job.ID, "Job failed: "+err.Error())
@@ -229,7 +248,7 @@ func (c *Client) handleJob(ctx context.Context, job DeploymentJob) error {
 		}
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, "/api/agent/jobs/"+job.ID+"/complete?host_id="+c.config.HostID, nil, nil)
+	return c.doJSON(ctx, http.MethodPost, "/api/agent/jobs/"+job.ID+"/complete?host_id="+c.config.HostID, completeBody, nil)
 }
 
 func (c *Client) handleSetupApp(ctx context.Context, job DeploymentJob) error {
@@ -285,6 +304,84 @@ func (c *Client) handleSetupApp(ctx context.Context, job DeploymentJob) error {
 	return nil
 }
 
+func (c *Client) handleDeploy(ctx context.Context, job DeploymentJob) (CompleteJobRequest, error) {
+	var metadata DeployMetadata
+	if strings.TrimSpace(job.MetadataJSON) == "" {
+		return CompleteJobRequest{}, errors.New("deploy metadata is required")
+	}
+	if err := json.Unmarshal([]byte(job.MetadataJSON), &metadata); err != nil {
+		return CompleteJobRequest{}, fmt.Errorf("decode deploy metadata: %w", err)
+	}
+	if strings.TrimSpace(metadata.RepoURL) == "" {
+		return CompleteJobRequest{}, errors.New("repo_url is required")
+	}
+	if !filepath.IsAbs(metadata.RootPath) {
+		return CompleteJobRequest{}, errors.New("root_path must be absolute")
+	}
+
+	ref := strings.TrimSpace(job.Ref)
+	if ref == "" {
+		ref = strings.TrimSpace(metadata.Ref)
+	}
+	if ref == "" {
+		ref = "main"
+	}
+
+	releaseKey := time.Now().UTC().Format("20060102150405") + "-" + safePathToken(ref) + "-" + shortID(job.ID)
+	releasesDir := filepath.Join(metadata.RootPath, "releases")
+	releasePath := filepath.Join(releasesDir, releaseKey)
+	tempPath := filepath.Join(releasesDir, ".tmp-"+releaseKey)
+	if err := os.MkdirAll(releasesDir, 0o755); err != nil {
+		return CompleteJobRequest{}, fmt.Errorf("create releases dir: %w", err)
+	}
+	if err := os.RemoveAll(tempPath); err != nil {
+		return CompleteJobRequest{}, fmt.Errorf("clean temp release: %w", err)
+	}
+	defer os.RemoveAll(tempPath)
+
+	c.uploadLog(ctx, job.ID, "Cloning "+metadata.RepoURL+" at "+ref)
+	if job.Ref != "" && job.CommitSHA == "" {
+		if out, err := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--branch", ref, metadata.RepoURL, tempPath).CombinedOutput(); err != nil {
+			return CompleteJobRequest{}, fmt.Errorf("git clone failed: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	} else {
+		if out, err := exec.CommandContext(ctx, "git", "clone", metadata.RepoURL, tempPath).CombinedOutput(); err != nil {
+			return CompleteJobRequest{}, fmt.Errorf("git clone failed: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		if job.CommitSHA != "" {
+			if out, err := exec.CommandContext(ctx, "git", "-C", tempPath, "checkout", job.CommitSHA).CombinedOutput(); err != nil {
+				return CompleteJobRequest{}, fmt.Errorf("git checkout failed: %w: %s", err, strings.TrimSpace(string(out)))
+			}
+		} else if ref != "" {
+			if out, err := exec.CommandContext(ctx, "git", "-C", tempPath, "checkout", ref).CombinedOutput(); err != nil {
+				return CompleteJobRequest{}, fmt.Errorf("git checkout failed: %w: %s", err, strings.TrimSpace(string(out)))
+			}
+		}
+	}
+
+	commitSHA := job.CommitSHA
+	if commitSHA == "" {
+		out, err := exec.CommandContext(ctx, "git", "-C", tempPath, "rev-parse", "HEAD").CombinedOutput()
+		if err != nil {
+			return CompleteJobRequest{}, fmt.Errorf("git rev-parse failed: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		commitSHA = strings.TrimSpace(string(out))
+	}
+	if err := os.Rename(tempPath, releasePath); err != nil {
+		return CompleteJobRequest{}, fmt.Errorf("activate release directory: %w", err)
+	}
+	if err := replaceSymlink(filepath.Join(metadata.RootPath, "current"), filepath.Join("releases", releaseKey)); err != nil {
+		return CompleteJobRequest{}, fmt.Errorf("update current symlink: %w", err)
+	}
+	c.uploadLog(ctx, job.ID, "Activated release "+releaseKey+" at "+releasePath)
+
+	return CompleteJobRequest{
+		ReleaseKey:  releaseKey,
+		ReleasePath: releasePath,
+		CommitSHA:   commitSHA,
+	}, nil
+}
+
 func writeIfMissing(path string, content []byte, perm os.FileMode) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -304,6 +401,55 @@ func ensureSymlink(linkPath, target string) error {
 		return err
 	}
 	return os.Symlink(target, linkPath)
+}
+
+func replaceSymlink(linkPath, target string) error {
+	if info, err := os.Lstat(linkPath); err == nil && info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("%s exists and is not a symlink", linkPath)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tempLink := linkPath + ".next"
+	if err := os.Remove(tempLink); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Symlink(target, tempLink); err != nil {
+		return err
+	}
+	return os.Rename(tempLink, linkPath)
+}
+
+func safePathToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			continue
+		}
+		if b.Len() > 0 {
+			last := b.String()[b.Len()-1]
+			if last != '-' {
+				b.WriteByte('-')
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "ref"
+	}
+	if len(out) > 40 {
+		return out[:40]
+	}
+	return out
+}
+
+func shortID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 8 {
+		return value
+	}
+	return value[len(value)-8:]
 }
 
 func defaultRecipe(metadata SetupAppMetadata) string {

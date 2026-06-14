@@ -22,6 +22,7 @@ type Store interface {
 
 	CreateRepository(ctx context.Context, repo model.Repository) (model.Repository, error)
 	ListRepositories(ctx context.Context) ([]model.Repository, error)
+	GetRepository(ctx context.Context, id string) (model.Repository, error)
 	DeleteRepository(ctx context.Context, id string) error
 
 	CreateApp(ctx context.Context, app model.App) (model.App, error)
